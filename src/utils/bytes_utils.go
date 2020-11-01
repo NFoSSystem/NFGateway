@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"net"
 )
 
 func FastPow(base, exp int) int {
@@ -22,6 +23,41 @@ func GetPortsFromBytes(ptr1, ptr2, ptr3, ptr4 int) func(packet []byte) (uint16, 
 		var target uint16 = (uint16(packet[ptr3]|0) << 8) | uint16(packet[ptr4])
 
 		return source, target, nil
+	}
+}
+
+func max(v1, v2 int) int {
+	if v1 > v2 {
+		return v1
+	} else {
+		return v2
+	}
+}
+
+func fastMax(values ...int) int {
+	if values == nil || len(values) == 0 {
+		return -1
+	} else {
+		if len(values) == 1 {
+			return values[0]
+		}
+
+		var vMax = values[0]
+		for val := range values[1:] {
+			vMax = max(vMax, val)
+		}
+		return vMax
+	}
+}
+
+func GetIPsFromBytes(ptr1, ptr2 int) func([]byte) (net.IP, net.IP, error) {
+	return func(pkt []byte) (net.IP, net.IP, error) {
+		if len(pkt) < max(ptr1+3, ptr2+3) {
+			return nil, nil, fmt.Errorf("Error byte buffer provided smaller than expected!")
+		}
+		return net.IPv4(pkt[ptr1], pkt[ptr1+1], pkt[ptr1+2], pkt[ptr1+3]),
+			net.IPv4(pkt[ptr2], pkt[ptr2+1], pkt[ptr2+2], pkt[ptr2+3]),
+			nil
 	}
 }
 
@@ -59,12 +95,11 @@ type BuffersPool struct {
 	buffLst   []*Buffer
 }
 
-func cleanUpRoutine(cleanChan <-chan *Buffer, pool chan *Buffer) {
+func cleanUpRoutine(index int, cleanChan <-chan *Buffer, pool chan *Buffer) {
 	for {
 		b := <-cleanChan
 		Memset(b.buff, 0)
 		pool <- b
-		fmt.Printf("Cleans buffer %d\n", b.id)
 	}
 }
 
@@ -78,7 +113,9 @@ func NewBuffersPool(buffSize uint16, poolSize uint8) *BuffersPool {
 	cleanChan := make(chan *Buffer, poolSize)
 	bp.cleanChan = cleanChan
 
-	go cleanUpRoutine(bp.cleanChan, bp.pool)
+	for i := uint8(0); i < uint8(poolSize/10); i++ {
+		go cleanUpRoutine(int(i), bp.cleanChan, bp.pool)
+	}
 
 	for i := uint8(0); i < poolSize; i++ {
 		b := &Buffer{}
@@ -98,6 +135,5 @@ Next method returns the next available buffer of a given BuffersPool
 */
 func (b *BuffersPool) Next() *Buffer {
 	buffer := <-b.pool
-	fmt.Printf("Returns buffer %d\n", buffer.id)
 	return buffer
 }

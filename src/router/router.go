@@ -1,6 +1,9 @@
 package main
 
 import (
+	"cnt"
+	"os"
+	"tcp"
 	"udp"
 	"unsafe"
 
@@ -17,43 +20,25 @@ import (
 
 const LOCAL_INTERFACE = "127.0.0.1"
 
-/*func main() {
-
-	ipMaxSize := utils.FastPow(2, 16) - 1
-	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(LOCAL_INTERFACE), "ip4:1"}
-	ltn, err := net.ListenIP("ip4:tcp", addr)
-	if err != nil {
-		fmt.Printf("Error opening listner on IP address %s\n", LOCAL_INTERFACE)
-		os.Exit(1)
-	}
-
-	buff := make([]byte, ipMaxSize)
-	log.Println("DEBUG point 1")
-	_, err = ltn.Read(buff)
-	if err != nil {
-		fmt.Printf("Error reading input from socket!\n")
-		os.Exit(1)
-	}
-
-	log.Println("DEBUG point 2")
-	header, err := ipv4.ParseHeader(buff[:])
-	if err != nil {
-		fmt.Printf("Error parsing IP datagram header!\n")
-		os.Exit(1)
-	}
-
-	fmt.Printf("Buffer content: %s\n", buff)
-	fmt.Printf("Header version: %d\n", header.Version)
-	fmt.Printf("Header length: %d\n", header.Len)
-	fmt.Printf("Package total length: %d\n", header.TotalLen)
-
-	parseAndSend(buff)
-}*/
-
 func main() {
+
+	args := os.Args[1:]
+	len := len(args)
+	if len < 3 {
+		log.Fatalf("Error provided parameter are not enough, expected 3, provided %d\n", len)
+	}
+
+	hostname := args[0]
+	auth := args[1]
+	action := args[2]
+
+	stop := make(chan struct{})
+	incPktChan := make(chan []byte)
 	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(LOCAL_INTERFACE), "ip4:1"}
-	//tcp.HandleIncomingRequestsFromIPv4(addr)
-	udp.HandleIncomingRequestsFromIPv4(addr)
+	go cnt.Handler(incPktChan, stop, hostname, auth, action)
+	go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan)
+	go udp.HandleIncomingRequestsFromIPv4(addr, incPktChan)
+	<-stop
 }
 
 func readLeadingPart(conn *net.IPConn, totalLen int, headerLen int) ([]byte, error) {
@@ -79,11 +64,7 @@ func parseAndSend(data []byte /*, flowInterfaceMap map[string]*net.IPAddr*/) err
 
 	log.Printf("IP Header size: %d", unsafe.Sizeof(header))
 
-	//payload := data[header.Len:header.TotalLen]
-
 	log.Printf("len(data[header.Len:header.TotalLen]): %d", len(data[header.Len:header.TotalLen]))
-
-	// log.Printf("Full datagram received: %v", data)
 
 	sourcePrt, targetPrt, err := getPortFromTCP(data[header.Len:header.TotalLen])
 
