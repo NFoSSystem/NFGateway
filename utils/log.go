@@ -1,48 +1,42 @@
 package utils
 
 import (
+	"context"
 	"fmt"
-	"log"
+	"strconv"
 	"time"
 
-	"github.com/piaohao/godis"
+	"github.com/go-redis/redis/v8"
 )
 
 type RedisPubSubWriter struct {
-	chanName string
-	client   *godis.Redis
+	client  *redis.Client
+	publish func(buff []byte) (int, error)
 }
 
 func NewRedisPubSubWriter(chanName string, hostname string, port uint16) (*RedisPubSubWriter, error) {
-	opt := &godis.Option{
-		Host: hostname,
-		Port: int(port),
-		Db:   0,
-	}
-
-	pool := godis.NewPool(&godis.PoolConfig{}, opt)
-	if pool == nil {
-		return nil, fmt.Errorf("Error opening Redis Pub/Sub pool!")
-	}
+	ctx := context.Background()
 
 	res := new(RedisPubSubWriter)
-	res.chanName = chanName
+	res.client = redis.NewClient(&redis.Options{
+		Network: "tcp",
+		Addr:    hostname + ":" + strconv.Itoa(int(port)),
+	})
 
-	cli, err := pool.GetResource()
-	if err != nil {
-		return nil, fmt.Errorf("Error opening Redis Pub/Sub pool!")
+	pSClient := res.client.Subscribe(ctx, chanName)
+	_, err := pSClient.Receive(ctx)
+
+	res.publish = func(buff []byte) (int, error) {
+		size, err := res.client.Publish(ctx, chanName, string(buff)).Result()
+		return int(size), err
 	}
-	res.client = cli
 
-	return res, nil
+	return res, fmt.Errorf("Error attempt opening Redis Pub/Sub Channel: %s",
+		err)
 }
 
 func (r *RedisPubSubWriter) Write(buff []byte) (int, error) {
-	if r.client == nil || r.chanName == "" {
-		log.Println(string(buff))
-	}
-	r.client.Publish(r.chanName, string(buff))
-	return len(buff), nil
+	return r.publish(buff)
 }
 
 func (r *RedisPubSubWriter) Close() error {
