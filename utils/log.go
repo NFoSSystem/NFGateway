@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -14,25 +15,28 @@ type RedisPubSubWriter struct {
 	publish func(buff []byte) (int, error)
 }
 
-func NewRedisPubSubWriter(chanName string, hostname string, port uint16) (*RedisPubSubWriter, error) {
+func NewRedisPubSubWriter(chanName string, hostname string, port int) (*RedisPubSubWriter, error) {
 	ctx := context.Background()
 
 	res := new(RedisPubSubWriter)
 	res.client = redis.NewClient(&redis.Options{
 		Network: "tcp",
-		Addr:    hostname + ":" + strconv.Itoa(int(port)),
+		Addr:    hostname + ":" + strconv.Itoa(port),
 	})
 
 	pSClient := res.client.Subscribe(ctx, chanName)
 	_, err := pSClient.Receive(ctx)
+
+	if err != nil {
+		return nil, fmt.Errorf("Error attempt opening Redis Pub/Sub Channel: %s", err)
+	}
 
 	res.publish = func(buff []byte) (int, error) {
 		size, err := res.client.Publish(ctx, chanName, string(buff)).Result()
 		return int(size), err
 	}
 
-	return res, fmt.Errorf("Error attempt opening Redis Pub/Sub Channel: %s",
-		err)
+	return res, nil
 }
 
 func (r *RedisPubSubWriter) Write(buff []byte) (int, error) {
@@ -46,4 +50,13 @@ func (r *RedisPubSubWriter) Close() error {
 func GetNanoSeconds() int64 {
 	t := time.Now()
 	return t.UnixNano()
+}
+
+func NewRedisLogger(logPrefix, chanName, hostname string, port int) (*log.Logger, error) {
+	rpsw, err := NewRedisPubSubWriter(chanName, hostname, port)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating RedisPubSubWriter: %s", err)
+	}
+
+	return log.New(rpsw, logPrefix, log.Ldate|log.Lmicroseconds), nil
 }
