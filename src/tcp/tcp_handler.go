@@ -47,7 +47,7 @@ func PktCrc16(buff []byte) (uint16, error) {
 	return crc16.ChecksumIBM(bSlice), nil
 }
 
-func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte) {
+func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte, logger *log.Logger) {
 	conn, err := net.ListenIP("ip4:tcp", addr)
 	if err != nil {
 		fmt.Printf("Error opening TCP connection on interface %s\n", addr.IP)
@@ -70,14 +70,11 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte) {
 		}
 
 		pktChan <- []byte(pktBuff.Buff())
+		pktBuff.Release()
 
 		src, trg, _ := GetPortsFromPkt(pktBuff.Buff())
 		srcIP, trgIP, _ := GetIPsFromPkt(pktBuff.Buff())
 
-		//log.Printf("Dump of TCP packet: %v\n", pktBuff.Buff())
-
 		log.Printf("Received TCP packet from %s:%d headed to %s:%d", srcIP, src, trgIP, trg)
-
-		// go utils.SendToEndpoint(pktBuff, "http://127.0.0.1:8080")
 	}
 }

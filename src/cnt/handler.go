@@ -18,7 +18,7 @@ const (
 	CONTAINER_HANDLER_PORT            = 9645
 	MAX_SENDER                        = 10
 	MAX_ACTION_RUNTIME_IN_SECONDS     = 60
-	ACTION_TRIGGER_TIMEOUT_IN_SECONDS = 10
+	ACTION_TRIGGER_TIMEOUT_IN_SECONDS = 30
 )
 
 type msg struct {
@@ -102,52 +102,69 @@ func AcceptRegisterRequests(avChan chan<- *container, addr *net.UDPAddr) {
 	}
 }
 
-func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, avChan <-chan *container) {
+func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, avChan <-chan *container, log *log.Logger) {
 	for {
 		select {
 		case pkt := <-incPkt:
-			code, _ := udp.PktCrc16(pkt)
+			code, err := udp.PktCrc16(pkt)
+			if err != nil {
+				log.Printf("Error during calculation of CRC 16")
+				continue
+			}
 			cnt, ok := cm.Get(code)
 			if !ok {
 				cnt = <-avChan
 				go cm.Add(code, cnt)
 			}
-			conn, _ := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
-			conn.Write(pkt)
-			conn.Close()
+			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
+			if err != nil {
+				log.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
+			}
+			_, err = conn.Write(pkt)
+			if err != nil {
+				log.Printf("Error writing packet to socket: %s\n", err)
+				conn.Close()
+				continue
+			}
+			err = conn.Close()
+			if err != nil {
+				log.Printf("Error closing socket: %s\n", err)
+				continue
+			}
+			log.Printf("Sent packet to %s:%d\n", (*cnt.addr), cnt.port)
 			continue
 		}
 	}
 }
 
 func instantiateFunctions(hostname, auth, actionName string, instances int) {
-	//timeout := time.NewTicker(ACTION_TRIGGER_TIMEOUT_IN_SECONDS * time.Second)
+	timeout := time.NewTicker(ACTION_TRIGGER_TIMEOUT_IN_SECONDS * time.Second)
 
-	//for {
-	for i := 0; i < instances; i++ {
-		err := op.CreateFunction(hostname, auth, actionName)
-		if err != nil {
-			log.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
-				actionName)
-			log.Printf("Error obtained: %s", err)
-		} else {
-			log.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
+	for {
+		for i := 0; i < instances; i++ {
+			err := op.CreateFunction(hostname, auth, actionName)
+			if err != nil {
+				log.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
+					actionName)
+				log.Printf("Error obtained: %s", err)
+			} else {
+				log.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
+			}
 		}
+		<-timeout.C
 	}
-	//<-timeout.C
-	//}
 }
 
-func Handler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, auth, actionName string) {
+func Handler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, auth, actionName string, logger *log.Logger) {
 	cntChan := make(chan *container)
 	cm := NewContainerMap(time.Duration(60 * time.Second))
 
-	for i := 0; i < MAX_SENDER; i++ {
-		go sendToContainer(cm, incPkt, cntChan)
-	}
-
 	go instantiateFunctions(hostname, auth, actionName, 5)
 	go AcceptRegisterRequests(cntChan, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
+
+	for i := 0; i < MAX_SENDER; i++ {
+		go sendToContainer(cm, incPkt, cntChan, logger)
+	}
 
 	<-stopChan
 }

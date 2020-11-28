@@ -46,7 +46,8 @@ func PktCrc16(buff []byte) (uint16, error) {
 	return crc16.ChecksumIBM(bSlice), nil
 }
 
-func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte) {
+func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte, logger *log.Logger) {
+	log.Println("DEBUG Enter into function HandleIncomingRequestsFromIPv4")
 	conn, err := net.ListenIP("ip4:udp", addr)
 	if err != nil {
 		log.Fatalf("Error opening UDP connection on interface %s\n", *addr)
@@ -54,26 +55,32 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte) {
 	}
 	defer conn.Close()
 
-	bp := utils.NewBuffersPool(MAX_UDP_PACKET_SIZE, 5)
+	//bp := utils.NewBuffersPool(MAX_UDP_PACKET_SIZE, 5)
 	for {
-		pktBuff := bp.Next()
-		if pktBuff == nil {
-			fmt.Println("Error the provided buffer is nil!")
-		}
+		// pktBuff := bp.Next()
+		// if pktBuff == nil {
+		// 	fmt.Println("Error the provided buffer is nil!")
+		// }
 
-		_, err = conn.Read(pktBuff.Buff())
+		pktBuff := make([]byte, 65535)
+
+		size, err := conn.Read(pktBuff)
 		if err != nil {
 			fmt.Errorf("Error reading UDP packet from interface %s", addr.IP)
-			pktBuff.Release()
+			//pktBuff.Release()
 			return
 		}
 
-		pktChan <- []byte(pktBuff.Buff())
-		pktBuff.Release()
+		pktBuff = pktBuff[:size]
+		src, trg, _ := GetPortsFromPkt(pktBuff)
+		srcIP, trgIP, _ := GetIPsFromPkt(pktBuff)
 
-		src, trg, _ := GetPortsFromPkt(pktBuff.Buff())
-		srcIP, trgIP, _ := GetIPsFromPkt(pktBuff.Buff())
+		if src == 53 {
+			continue
+		}
 
-		log.Printf("Received UDP packet from %s:%d headed to %s:%d", srcIP, src, trgIP, trg)
+		pktChan <- []byte(pktBuff)
+		//pktBuff.Release()
+		log.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
 	}
 }
