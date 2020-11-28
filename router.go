@@ -9,7 +9,7 @@ import (
 	"os"
 )
 
-const LOCAL_INTERFACE = "127.0.0.1"
+var RLogger *log.Logger
 
 func main() {
 
@@ -26,16 +26,9 @@ func main() {
 	stop := make(chan struct{})
 	incPktChan := make(chan []byte, 200)
 
-	rpsw, err := utils.NewRedisPubSubWriter("logChan", LOCAL_INTERFACE, 6379)
-	if err != nil {
-		log.Println("Error creating RedisPubSubWriter: %s", rpsw)
-	}
-
-	rLogger := log.New(rpsw, "[Gateway]", log.Ldate|log.Lmicroseconds)
-
-	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(LOCAL_INTERFACE), "ip4:1"}
-	go cnt.Handler(incPktChan, stop, hostname, auth, action, rLogger)
+	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(utils.LOCAL_INTERFACE), "ip4:1"}
+	go cnt.Handler(incPktChan, stop, hostname, auth, action, RLogger)
 	//go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)
-	go udp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)
+	go udp.HandleIncomingRequestsFromIPv4(addr, incPktChan, RLogger)
 	<-stop
 }
