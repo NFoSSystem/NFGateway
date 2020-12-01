@@ -2,6 +2,7 @@ package main
 
 import (
 	"faasrouter/cnt"
+	"faasrouter/initnf"
 	"faasrouter/udp"
 	"faasrouter/utils"
 	"log"
@@ -15,20 +16,22 @@ func main() {
 
 	args := os.Args[1:]
 	len := len(args)
-	if len < 3 {
+	if len < 2 {
 		log.Fatalf("Error provided parameter are not enough, expected 3, provided %d\n", len)
 	}
 
 	hostname := args[0]
 	auth := args[1]
-	action := args[2]
 
 	stop := make(chan struct{})
-	incPktChan := make(chan []byte, 200)
+
+	initnf.InitNat()
+	initnf.InitDhcp()
 
 	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(utils.LOCAL_INTERFACE), "ip4:1"}
-	go cnt.Handler(incPktChan, stop, hostname, auth, action, RLogger)
+
+	rl := cnt.InitRuleMap(stop, hostname, auth, RLogger)
 	//go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)
-	go udp.HandleIncomingRequestsFromIPv4(addr, incPktChan, RLogger)
+	go udp.HandleIncomingRequestsFromIPv4(addr, rl, RLogger)
 	<-stop
 }
