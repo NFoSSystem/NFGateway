@@ -9,7 +9,7 @@ import (
 
 const LOCAL_INTERFACE = "127.0.0.1"
 
-func init() {
+func InitNat() {
 	rpsw, err := utils.NewRedisPubSubWriter("logChan", LOCAL_INTERFACE, 6379)
 	if err != nil {
 		log.Println("Error creating RedisPubSubWriter: %s", rpsw)

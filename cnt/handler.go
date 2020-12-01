@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bitbucket.org/Manaphy91/nflib"
 )
 
 const (
@@ -72,21 +74,21 @@ func getBytesFromMsg(src msg) []byte {
 	return buff.Bytes()
 }
 
-func addEntryToChan(avChan chan<- *container, b *utils.Buffer) {
+func addEntryToChan(cl *ContainerList, b *utils.Buffer) {
 	// get container address and port and add it to the channel
 	bSlice := b.Buff()
-	tMsg := getMsgFromBytes(bSlice[:])
+	tMsg := nflib.GetMsgFromBytes(bSlice[:])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
 	cnt := &container{&ipAddr, tMsg.Port}
 	log.Printf("Accepting incoming PING request from address %s port %d\n", ipAddr, tMsg.Port)
-	avChan <- cnt
+	cl.AddContainer(cnt)
 
 	// release the acquired buffer as soon as it is not useful anymore
 	b.Release()
 }
 
-func AcceptRegisterRequests(avChan chan<- *container, addr *net.UDPAddr) {
+func AcceptRegisterRequests(cl *ContainerList, addr *net.UDPAddr) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		log.Println("Error opening UDP connection on interface %s and port %d", addr.IP, addr.Port)
@@ -98,11 +100,11 @@ func AcceptRegisterRequests(avChan chan<- *container, addr *net.UDPAddr) {
 	for {
 		b := bp.Next()
 		conn.Read(b.Buff())
-		go addEntryToChan(avChan, b)
+		go addEntryToChan(cl, b)
 	}
 }
 
-func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, avChan <-chan *container, log *log.Logger) {
+func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *container, log *log.Logger) {
 	for {
 		select {
 		case pkt := <-incPkt:
@@ -113,7 +115,7 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, avChan <-chan *cont
 			}
 			cnt, ok := cm.Get(code)
 			if !ok {
-				cnt = <-avChan
+				cnt = <-cntChan
 				go cm.Add(code, cnt)
 			}
 			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
@@ -155,16 +157,64 @@ func instantiateFunctions(hostname, auth, actionName string, instances int) {
 	}
 }
 
-func Handler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, auth, actionName string, logger *log.Logger) {
+func handleContainerPool(cl *ContainerList, out chan<- *container) {
+	for {
+		for _, val := range cl.lst {
+			out <- val
+		}
+	}
+}
+
+func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, auth, actionName string, logger *log.Logger) {
 	cntChan := make(chan *container)
 	cm := NewContainerMap(time.Duration(60 * time.Second))
+	cl := NewContainerList()
+
+	go handleContainerPool(cl, cntChan)
 
 	go instantiateFunctions(hostname, auth, actionName, 5)
-	go AcceptRegisterRequests(cntChan, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
+	go AcceptRegisterRequests(cl, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
+	go handleContainerPool(cl, cntChan)
 
 	for i := 0; i < MAX_SENDER; i++ {
 		go sendToContainer(cm, incPkt, cntChan, logger)
 	}
 
 	<-stopChan
+}
+
+func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger) *utils.RuleMap {
+	rl := new(utils.RuleMap)
+
+	dhcpChan := make(chan []byte, 200)
+
+	rl.Add(func(pkt []byte) bool {
+		_, trg, err := utils.GetPortsFromPkt(pkt)
+		if err != nil {
+			log.Printf("Error reading ports from the incoming packet: %s\n")
+			return false
+		}
+
+		// check if the incoming message is a DNS message
+		return trg == 68
+	}, dhcpChan)
+
+	go ActionHandler(dhcpChan, stopChan, hostname, auth, "dhcp", logger)
+
+	natChan := make(chan []byte, 200)
+
+	rl.Add(func(pkt []byte) bool {
+		src, _, err := utils.GetPortsFromPkt(pkt)
+		if err != nil {
+			log.Printf("Error reading ports from the incoming packet: %s\n")
+			return false
+		}
+
+		// filter out incoming messages having 53 as source port
+		return src != 53
+	}, natChan)
+
+	go ActionHandler(natChan, stopChan, hostname, auth, "nat", logger)
+
+	return rl
 }

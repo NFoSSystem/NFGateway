@@ -10,17 +10,8 @@ import (
 )
 
 const (
-	MAX_UDP_PACKET_SIZE   = 65535
-	UDP_IP_SRC_FIRST_BYTE = 12
-	UDP_IP_TRG_FIRST_BYTE = 16
-	UDP_SRC_FIRST_WORD    = 20
-	UDP_TRG_FIRST_WORD    = 22
+	MAX_UDP_PACKET_SIZE = 65535
 )
-
-var GetIPsFromPkt func([]byte) (net.IP, net.IP, error) = utils.GetIPsFromBytes(UDP_IP_SRC_FIRST_BYTE, UDP_IP_TRG_FIRST_BYTE)
-
-var GetPortsFromPkt func([]byte) (uint16, uint16, error) = utils.GetPortsFromBytes(UDP_SRC_FIRST_WORD, UDP_SRC_FIRST_WORD+1,
-	UDP_TRG_FIRST_WORD, UDP_TRG_FIRST_WORD+1)
 
 /*
 PktCrc16 calculates Crc16 from source IP, target IP, source port and target port from provided packet.
@@ -28,12 +19,12 @@ PktCrc16 calculates Crc16 from source IP, target IP, source port and target port
 func PktCrc16(buff []byte) (uint16, error) {
 	bSlice := make([]byte, 12)
 
-	srcIP, trgIP, err := GetIPsFromPkt(buff)
+	srcIP, trgIP, err := utils.GetIPsFromPkt(buff)
 	if err != nil {
 		return uint16(0), fmt.Errorf("Error reading IP addresses from packet!")
 	}
 
-	src, trg, err := GetPortsFromPkt(buff)
+	src, trg, err := utils.GetPortsFromPkt(buff)
 	if err != nil {
 		return uint16(0), fmt.Errorf("Error reading source and target addresses from packet!")
 	}
@@ -46,7 +37,7 @@ func PktCrc16(buff []byte) (uint16, error) {
 	return crc16.ChecksumIBM(bSlice), nil
 }
 
-func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte, logger *log.Logger) {
+func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, logger *log.Logger) {
 	log.Println("DEBUG Enter into function HandleIncomingRequestsFromIPv4")
 	conn, err := net.ListenIP("ip4:udp", addr)
 	if err != nil {
@@ -72,14 +63,23 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, pktChan chan []byte, logge
 		}
 
 		pktBuff = pktBuff[:size]
-		src, trg, _ := GetPortsFromPkt(pktBuff)
-		srcIP, trgIP, _ := GetIPsFromPkt(pktBuff)
+		src, trg, _ := utils.GetPortsFromPkt(pktBuff)
+		srcIP, trgIP, _ := utils.GetIPsFromPkt(pktBuff)
 
 		if src == 53 {
 			continue
 		}
 
-		pktChan <- []byte(pktBuff)
+		buff := []byte(pktBuff)
+
+		outChan := ruleMap.GetChan(buff)
+		if outChan == nil {
+			log.Println("Error no out chan available for incoming packet, packet dropped")
+			continue
+		}
+
+		outChan <- buff
+
 		//pktBuff.Release()
 		log.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
 	}
