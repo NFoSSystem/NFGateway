@@ -3,9 +3,10 @@ package openwhisk
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strings"
+
+	"faasrouter/utils"
 )
 
 // Arguments:
@@ -16,7 +17,7 @@ import (
 // - value
 func CreateFunction(hostname, auth, action string) error {
 
-	log.Println("Startup")
+	utils.RLogger.Println("Startup")
 
 	cl := &http.Client{}
 
@@ -25,13 +26,13 @@ func CreateFunction(hostname, auth, action string) error {
 	reqBody := strings.NewReader("{\"address\":\"172.17.0.1\", \"port\":\"9082\"}")
 	req, err := http.NewRequest("POST", endpoint, reqBody)
 	if err != nil {
-		log.Fatalf("Error creating new POST request!\nExit from application")
+		utils.RLogger.Fatalf("Error creating new POST request!\nExit from application")
 	}
 
 	req.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
 	req.Header.Add("Content-Type", "application/json")
 
-	log.Println("Before POST request")
+	utils.RLogger.Println("Before POST request")
 	resp, err := cl.Do(req)
 	if err != nil {
 		return fmt.Errorf("Error sending POST request to %s\n", endpoint)
@@ -43,10 +44,10 @@ func CreateFunction(hostname, auth, action string) error {
 
 	text, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal("Error reading response to POST request\nExit from application")
+		utils.RLogger.Fatal("Error reading response to POST request\nExit from application")
 	}
 
-	log.Printf("POST request response: %s", string(text))
+	utils.RLogger.Printf("POST request response: %s", string(text))
 
 	return nil
 }

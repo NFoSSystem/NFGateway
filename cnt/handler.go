@@ -81,7 +81,7 @@ func addEntryToChan(cl *ContainerList, b *utils.Buffer) {
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
 	cnt := &container{&ipAddr, tMsg.Port}
-	log.Printf("Accepting incoming PING request from address %s port %d\n", ipAddr, tMsg.Port)
+	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d\n", ipAddr, tMsg.Port)
 	cl.AddContainer(cnt)
 
 	// release the acquired buffer as soon as it is not useful anymore
@@ -91,7 +91,7 @@ func addEntryToChan(cl *ContainerList, b *utils.Buffer) {
 func AcceptRegisterRequests(cl *ContainerList, addr *net.UDPAddr) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
-		log.Println("Error opening UDP connection on interface %s and port %d", addr.IP, addr.Port)
+		utils.RLogger.Println("Error opening UDP connection on interface %s and port %d", addr.IP, addr.Port)
 		return
 	}
 	defer conn.Close()
@@ -110,7 +110,7 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *con
 		case pkt := <-incPkt:
 			code, err := udp.PktCrc16(pkt)
 			if err != nil {
-				log.Printf("Error during calculation of CRC 16")
+				utils.RLogger.Printf("Error during calculation of CRC 16")
 				continue
 			}
 			cnt, ok := cm.Get(code)
@@ -120,20 +120,20 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *con
 			}
 			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
 			if err != nil {
-				log.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
+				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
 			}
 			_, err = conn.Write(pkt)
 			if err != nil {
-				log.Printf("Error writing packet to socket: %s\n", err)
+				utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
 				conn.Close()
 				continue
 			}
 			err = conn.Close()
 			if err != nil {
-				log.Printf("Error closing socket: %s\n", err)
+				utils.RLogger.Printf("Error closing socket: %s\n", err)
 				continue
 			}
-			log.Printf("Sent packet to %s:%d\n", (*cnt.addr), cnt.port)
+			utils.RLogger.Printf("Sent packet to %s:%d\n", (*cnt.addr), cnt.port)
 			continue
 		}
 	}
@@ -146,11 +146,11 @@ func instantiateFunctions(hostname, auth, actionName string, instances int) {
 		for i := 0; i < instances; i++ {
 			err := op.CreateFunction(hostname, auth, actionName)
 			if err != nil {
-				log.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
+				utils.RLogger.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
 					actionName)
-				log.Printf("Error obtained: %s", err)
+				utils.RLogger.Printf("Error obtained: %s", err)
 			} else {
-				log.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
+				utils.RLogger.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
 			}
 		}
 		<-timeout.C
@@ -184,14 +184,14 @@ func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, aut
 }
 
 func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger) *utils.RuleMap {
-	rl := new(utils.RuleMap)
+	rl := utils.NewRuleMap()
 
 	dhcpChan := make(chan []byte, 200)
 
 	rl.Add(func(pkt []byte) bool {
 		_, trg, err := utils.GetPortsFromPkt(pkt)
 		if err != nil {
-			log.Printf("Error reading ports from the incoming packet: %s\n")
+			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
 			return false
 		}
 
@@ -206,7 +206,7 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 	rl.Add(func(pkt []byte) bool {
 		src, _, err := utils.GetPortsFromPkt(pkt)
 		if err != nil {
-			log.Printf("Error reading ports from the incoming packet: %s\n")
+			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
 			return false
 		}
 

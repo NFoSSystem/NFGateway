@@ -4,6 +4,11 @@ type ruleFunc *func([]byte) bool
 
 type RuleMap map[ruleFunc]chan []byte
 
+func NewRuleMap() *RuleMap {
+	rl := RuleMap(make(map[ruleFunc]chan []byte))
+	return &rl
+}
+
 func (rm RuleMap) Add(f func([]byte) bool, pktChan chan []byte) {
 	rf := ruleFunc(&f)
 	rm[rf] = pktChan
