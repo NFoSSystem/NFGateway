@@ -38,10 +38,10 @@ func PktCrc16(buff []byte) (uint16, error) {
 }
 
 func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, logger *log.Logger) {
-	log.Println("DEBUG Enter into function HandleIncomingRequestsFromIPv4")
+	utils.RLogger.Println("DEBUG Enter into function HandleIncomingRequestsFromIPv4")
 	conn, err := net.ListenIP("ip4:udp", addr)
 	if err != nil {
-		log.Fatalf("Error opening UDP connection on interface %s\n", *addr)
+		utils.RLogger.Fatalf("Error opening UDP connection on interface %s\n", *addr)
 		return
 	}
 	defer conn.Close()
@@ -74,13 +74,13 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, lo
 
 		outChan := ruleMap.GetChan(buff)
 		if outChan == nil {
-			log.Println("Error no out chan available for incoming packet, packet dropped")
+			utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
 			continue
 		}
 
 		outChan <- buff
 
 		//pktBuff.Release()
-		log.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
+		utils.RLogger.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
 	}
 }

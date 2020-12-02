@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"time"
 
@@ -53,10 +54,11 @@ func GetNanoSeconds() int64 {
 }
 
 func NewRedisLogger(logPrefix, chanName, hostname string, port int) (*log.Logger, error) {
-	rpsw, err := NewRedisPubSubWriter(chanName, hostname, port)
-	if err != nil {
-		return nil, fmt.Errorf("Error creating RedisPubSubWriter: %s", err)
-	}
+	// rpsw, err := NewRedisPubSubWriter(chanName, hostname, port)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Error creating RedisPubSubWriter: %s", err)
+	// }
 
-	return log.New(rpsw, logPrefix, log.Ldate|log.Lmicroseconds), nil
+	//return log.New(rpsw, logPrefix, log.Ldate|log.Lmicroseconds), nil
+	return log.New(os.Stdin, logPrefix, log.Ldate|log.Lmicroseconds), nil
 }
