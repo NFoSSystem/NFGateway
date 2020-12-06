@@ -74,33 +74,34 @@ func getBytesFromMsg(src msg) []byte {
 	return buff.Bytes()
 }
 
-func addEntryToChan(cl *ContainerList, b *utils.Buffer) {
+func addEntryToChan(cl *ContainerList, buff []byte, size int) {
 	// get container address and port and add it to the channel
-	bSlice := b.Buff()
-	tMsg := nflib.GetMsgFromBytes(bSlice[:])
+	//bSlice := b.Buff()
+	tMsg := nflib.GetMsgFromBytes(buff[:size])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
 	cnt := &container{&ipAddr, tMsg.Port}
-	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d\n", ipAddr, tMsg.Port)
+	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d action %s\n", ipAddr, tMsg.Port, tMsg.Name)
 	cl.AddContainer(cnt)
 
 	// release the acquired buffer as soon as it is not useful anymore
-	b.Release()
+	//b.Release()
 }
 
-func AcceptRegisterRequests(cl *ContainerList, addr *net.UDPAddr) {
+func AcceptRegisterRequests(natCl, dhcpCl *ContainerList, addr *net.UDPAddr) {
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
-		utils.RLogger.Println("Error opening UDP connection on interface %s and port %d", addr.IP, addr.Port)
+		utils.RLogger.Printf("Error opening UDP connection on interface %s and port %d: %s\n", addr.IP, addr.Port, err)
 		return
 	}
 	defer conn.Close()
 
-	bp := utils.NewBuffersPool(udp.MAX_UDP_PACKET_SIZE, 100)
+	//bp := utils.NewBuffersPool(udp.MAX_UDP_PACKET_SIZE, 100)
 	for {
-		b := bp.Next()
-		conn.Read(b.Buff())
-		go addEntryToChan(cl, b)
+		//b := bp.Next()
+		buff := make([]byte, 65535)
+		size, _ := conn.Read(buff)
+		go addEntryToChan(natCl, buff, size)
 	}
 }
 
@@ -159,22 +160,23 @@ func instantiateFunctions(hostname, auth, actionName string, instances int) {
 
 func handleContainerPool(cl *ContainerList, out chan<- *container) {
 	for {
+		if cl.Empty() {
+			continue
+		}
 		for _, val := range cl.lst {
+			utils.RLogger.Println("DEBUG before send to chan")
 			out <- val
+			utils.RLogger.Println("DEBUG after send to chan")
 		}
 	}
 }
 
-func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, auth, actionName string, logger *log.Logger) {
+func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, cl *ContainerList, hostname, auth, actionName string, logger *log.Logger) {
 	cntChan := make(chan *container)
 	cm := NewContainerMap(time.Duration(60 * time.Second))
-	cl := NewContainerList()
 
 	go handleContainerPool(cl, cntChan)
-
-	go instantiateFunctions(hostname, auth, actionName, 5)
-	go AcceptRegisterRequests(cl, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
-	go handleContainerPool(cl, cntChan)
+	go instantiateFunctions(hostname, auth, actionName, 1)
 
 	for i := 0; i < MAX_SENDER; i++ {
 		go sendToContainer(cm, incPkt, cntChan, logger)
@@ -185,21 +187,25 @@ func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, hostname, aut
 
 func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger) *utils.RuleMap {
 	rl := utils.NewRuleMap()
+	natCl := NewContainerList()
+	dhcpCl := NewContainerList()
 
-	dhcpChan := make(chan []byte, 200)
+	go AcceptRegisterRequests(natCl, dhcpCl, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
 
-	rl.Add(func(pkt []byte) bool {
-		_, trg, err := utils.GetPortsFromPkt(pkt)
-		if err != nil {
-			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
-			return false
-		}
+	// dhcpChan := make(chan []byte, 200)
 
-		// check if the incoming message is a DNS message
-		return trg == 68
-	}, dhcpChan)
+	// rl.Add(func(pkt []byte) bool {
+	// 	_, trg, err := utils.GetPortsFromPkt(pkt)
+	// 	if err != nil {
+	// 		utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
+	// 		return false
+	// 	}
 
-	go ActionHandler(dhcpChan, stopChan, hostname, auth, "dhcp", logger)
+	// 	// check if the incoming message is a DNS message
+	// 	return trg == 67
+	// }, dhcpChan)
+
+	// go ActionHandler(dhcpChan, stopChan, dhcpCl, hostname, auth, "dhcp", logger)
 
 	natChan := make(chan []byte, 200)
 
@@ -214,7 +220,7 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 		return src != 53
 	}, natChan)
 
-	go ActionHandler(natChan, stopChan, hostname, auth, "nat", logger)
+	go ActionHandler(natChan, stopChan, natCl, hostname, auth, "nat", logger)
 
 	return rl
 }

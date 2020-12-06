@@ -38,7 +38,6 @@ func PktCrc16(buff []byte) (uint16, error) {
 }
 
 func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, logger *log.Logger) {
-	utils.RLogger.Println("DEBUG Enter into function HandleIncomingRequestsFromIPv4")
 	conn, err := net.ListenIP("ip4:udp", addr)
 	if err != nil {
 		utils.RLogger.Fatalf("Error opening UDP connection on interface %s\n", *addr)
@@ -66,7 +65,7 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, lo
 		src, trg, _ := utils.GetPortsFromPkt(pktBuff)
 		srcIP, trgIP, _ := utils.GetIPsFromPkt(pktBuff)
 
-		if src == 53 {
+		if trg != 5000 || srcIP.String() != "192.168.1.249" {
 			continue
 		}
 
@@ -74,7 +73,7 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, lo
 
 		outChan := ruleMap.GetChan(buff)
 		if outChan == nil {
-			utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
+			//utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
 			continue
 		}
 

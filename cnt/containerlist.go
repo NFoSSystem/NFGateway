@@ -21,3 +21,7 @@ func (cl *ContainerList) AddContainer(cnt *container) {
 func (cl *ContainerList) GetList() []*container {
 	return cl.lst
 }
+
+func (c *ContainerList) Empty() bool {
+	return len(c.lst) == 0
+}

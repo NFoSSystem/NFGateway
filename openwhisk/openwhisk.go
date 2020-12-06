@@ -16,9 +16,6 @@ import (
 // - param
 // - value
 func CreateFunction(hostname, auth, action string) error {
-
-	utils.RLogger.Println("Startup")
-
 	cl := &http.Client{}
 
 	endpoint := makeEndpointString(hostname, action)
@@ -32,7 +29,6 @@ func CreateFunction(hostname, auth, action string) error {
 	req.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
 	req.Header.Add("Content-Type", "application/json")
 
-	utils.RLogger.Println("Before POST request")
 	resp, err := cl.Do(req)
 	if err != nil {
 		return fmt.Errorf("Error sending POST request to %s\n", endpoint)
