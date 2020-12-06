@@ -4,7 +4,6 @@ import (
 	"faasrouter/cnt"
 	"faasrouter/initnf"
 	"faasrouter/udp"
-	"faasrouter/utils"
 	"log"
 	"net"
 	"os"
@@ -28,7 +27,7 @@ func main() {
 	initnf.InitNat()
 	initnf.InitDhcp()
 
-	var addr *net.IPAddr = &net.IPAddr{net.ParseIP(utils.LOCAL_INTERFACE), "ip4:1"}
+	var addr *net.IPAddr = &net.IPAddr{net.IPv4(0, 0, 0, 0), "ip4:1"}
 
 	rl := cnt.InitRuleMap(stop, hostname, auth, RLogger)
 	//go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)

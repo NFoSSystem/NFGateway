@@ -20,6 +20,7 @@ type ContainerMap struct {
 func NewContainerMap(timeout time.Duration) *ContainerMap {
 	res := new(ContainerMap)
 	res.im = make(map[uint16]*container)
+	res.timeout = &timeout
 	return res
 }
 
@@ -45,7 +46,8 @@ func (cpm *ContainerMap) Add(crc uint16, cnt *container) {
 }
 
 func (cpm *ContainerMap) Get(crc uint16) (*container, bool) {
-	cpm.mu.RLock()
+	cpm.mu.Lock()
+	defer cpm.mu.Unlock()
 	if res, ok := cpm.im[crc]; ok {
 		return res, ok
 	} else {
