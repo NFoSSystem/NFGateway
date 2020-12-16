@@ -38,6 +38,7 @@ func main() {
 		bytesReceived := 0
 		buff := make([]byte, 1460)
 		var testRunning bool = true
+		var pktNum int = 0
 
 		var startTime int64
 		for testRunning {
@@ -53,6 +54,7 @@ func main() {
 				})
 			}
 
+			pktNum++
 			bytesReceived += size
 		}
 
@@ -63,8 +65,8 @@ func main() {
 		bytesReceived += size
 		elapsedTime := time.Now().UnixNano() - startTime
 
-		log.Printf("BytesReceived: %d - StartTime: %d - ElapsedTime: %d\n", bytesReceived, startTime, elapsedTime)
-		log.Printf("Throughtput calculated: %.2f\n", calculateThroughput(bytesReceived, elapsedTime))
+		log.Printf("Packets received: %d - Bytes received: %d - Throughtput calculated: %.2f\n", pktNum,
+			bytesReceived, calculateThroughput(bytesReceived, elapsedTime))
 	} else {
 		if len(args) < 3 {
 			log.Fatalln("Error too few parameters!")
