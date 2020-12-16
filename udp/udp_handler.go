@@ -37,7 +37,20 @@ func PktCrc16(buff []byte) (uint16, error) {
 	return crc16.ChecksumIBM(bSlice), nil
 }
 
+func OpenSocketOnPort() {
+	stopChan := make(chan struct{})
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{net.IPv4(0, 0, 0, 0), 5000, ""})
+	if err != nil {
+		utils.RLogger.Fatalln("Error opening UDP socket on port 5000")
+	}
+	defer conn.Close()
+
+	<-stopChan
+}
+
 func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, logger *log.Logger) {
+	go OpenSocketOnPort()
 	conn, err := net.ListenIP("ip4:udp", addr)
 	if err != nil {
 		utils.RLogger.Fatalf("Error opening UDP connection on interface %s\n", *addr)
@@ -62,10 +75,11 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, lo
 		}
 
 		pktBuff = pktBuff[:size]
+
 		src, trg, _ := utils.GetPortsFromPkt(pktBuff)
 		srcIP, trgIP, _ := utils.GetIPsFromPkt(pktBuff)
 
-		if trg != 5000 || srcIP.String() != "192.168.1.249" {
+		if trg != 67 && trg != 5000 {
 			continue
 		}
 
@@ -73,7 +87,7 @@ func HandleIncomingRequestsFromIPv4(addr *net.IPAddr, ruleMap *utils.RuleMap, lo
 
 		outChan := ruleMap.GetChan(buff)
 		if outChan == nil {
-			//utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
+			utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
 			continue
 		}
 

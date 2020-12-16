@@ -74,34 +74,52 @@ func getBytesFromMsg(src msg) []byte {
 	return buff.Bytes()
 }
 
-func addEntryToChan(cl *ContainerList, buff []byte, size int) {
+//func addEntryToChan(outChan chan<- *container, cl *ContainerList, buff []byte, size int) {
+func addEntryToChan(cil map[string]*ContainerInfo, buff []byte, size int) {
 	// get container address and port and add it to the channel
 	//bSlice := b.Buff()
 	tMsg := nflib.GetMsgFromBytes(buff[:size])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
-	cnt := &container{&ipAddr, tMsg.Port}
-	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d action %s\n", ipAddr, tMsg.Port, tMsg.Name)
-	cl.AddContainer(cnt)
+	cnt := &container{addr: &ipAddr, port: tMsg.Port, fluxes: 1}
+	actionName := trimActionName(fmt.Sprintf("%s", tMsg.Name))
+
+	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d action %s\n", ipAddr, tMsg.Port, actionName)
+
+	cil[actionName].cntChan <- cnt
+	cil[actionName].cntLst.AddContainer(cnt)
 
 	// release the acquired buffer as soon as it is not useful anymore
 	//b.Release()
 }
 
-func AcceptRegisterRequests(natCl, dhcpCl *ContainerList, addr *net.UDPAddr) {
-	conn, err := net.ListenUDP("udp", addr)
+func trimActionName(actionName string) string {
+	for i, c := range actionName {
+		if c == rune(0) {
+			return actionName[:i]
+		}
+	}
+	return actionName
+}
+
+func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
+	lstn, err := net.ListenTCP("tcp", addr)
 	if err != nil {
-		utils.RLogger.Printf("Error opening UDP connection on interface %s and port %d: %s\n", addr.IP, addr.Port, err)
+		utils.RLogger.Printf("Error opening TCP connection on interface %s and port %d: %s\n", addr.IP, addr.Port, err)
 		return
 	}
-	defer conn.Close()
+	defer lstn.Close()
 
-	//bp := utils.NewBuffersPool(udp.MAX_UDP_PACKET_SIZE, 100)
+	utils.RLogger.Println("DEBUG Opened TCP socket at %s:%d\n", addr.IP, addr.Port, err)
 	for {
-		//b := bp.Next()
+		conn, err := lstn.AcceptTCP()
+		if err != nil {
+			utils.RLogger.Printf("Error accepting TCP connection from %s:%d: %s\n", addr.IP, addr.Port, err)
+			continue
+		}
 		buff := make([]byte, 65535)
 		size, _ := conn.Read(buff)
-		go addEntryToChan(natCl, buff, size)
+		go addEntryToChan(cil, buff, size)
 	}
 }
 
@@ -109,31 +127,39 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *con
 	for {
 		select {
 		case pkt := <-incPkt:
+			utils.RLogger.Println("DEBUG 1 sendToContainer")
 			code, err := udp.PktCrc16(pkt)
 			if err != nil {
 				utils.RLogger.Printf("Error during calculation of CRC 16")
 				continue
 			}
+			utils.RLogger.Println("DEBUG 2 sendToContainer")
 			cnt, ok := cm.Get(code)
 			if !ok {
+				utils.RLogger.Println("DEBUG 2.5 sendToContainer")
 				cnt = <-cntChan
+				utils.RLogger.Println("DEBUG 2.6 sendToContainer")
 				go cm.Add(code, cnt)
 			}
+			utils.RLogger.Println("DEBUG 3 sendToContainer")
 			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
 			if err != nil {
 				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
 			}
+			utils.RLogger.Println("DEBUG 4 sendToContainer")
 			_, err = conn.Write(pkt)
 			if err != nil {
 				utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
 				conn.Close()
 				continue
 			}
+			utils.RLogger.Println("DEBUG 5 sendToContainer")
 			err = conn.Close()
 			if err != nil {
 				utils.RLogger.Printf("Error closing socket: %s\n", err)
 				continue
 			}
+			utils.RLogger.Println("DEBUG 6 sendToContainer")
 			utils.RLogger.Printf("Sent packet to %s:%d\n", (*cnt.addr), cnt.port)
 			continue
 		}
@@ -158,25 +184,49 @@ func instantiateFunctions(hostname, auth, actionName string, instances int) {
 	}
 }
 
-func handleContainerPool(cl *ContainerList, out chan<- *container) {
+// func handleContainerPool(cl *ContainerList, out chan<- *container) {
+// 	for {
+// 		if cl.Empty() {
+// 			<-time.NewTimer(time.Millisecond).C
+// 		}
+
+// 		for _, val := range cl.lst {
+// 			out <- val
+// 		}
+// 	}
+// }
+
+func handleContainerPool(inChan <-chan *container, outChan chan<- *container) {
 	for {
-		if cl.Empty() {
-			continue
-		}
-		for _, val := range cl.lst {
-			utils.RLogger.Println("DEBUG before send to chan")
-			out <- val
-			utils.RLogger.Println("DEBUG after send to chan")
+		select {
+		case cnt := <-inChan:
+			outChan <- cnt
 		}
 	}
 }
 
-func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, cl *ContainerList, hostname, auth, actionName string, logger *log.Logger) {
-	cntChan := make(chan *container)
+func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, inChan <-chan *container, cl *ContainerList, hostname, auth, actionName string, logger *log.Logger) {
+	cntChan := make(chan *container, 50)
 	cm := NewContainerMap(time.Duration(60 * time.Second))
 
-	go handleContainerPool(cl, cntChan)
-	go instantiateFunctions(hostname, auth, actionName, 1)
+	go handleContainerPool(inChan, cntChan)
+
+	p := new(Provisioner)
+	p.Hostname = hostname
+	p.Auth = auth
+	p.Action = actionName
+	p.Check = 100 * time.Millisecond
+	p.Timeout = 55 * time.Second
+	p.UpThr = 0.6
+	p.DownThr = 0.3
+	p.UpInc = 0.5
+	p.DownInc = 0.4
+	p.Min = 1
+	p.Cl = cl
+
+	go p.InstantiateFunctions()
+
+	//go instantiateFunctions(hostname, auth, actionName, 1)
 
 	for i := 0; i < MAX_SENDER; i++ {
 		go sendToContainer(cm, incPkt, cntChan, logger)
@@ -188,9 +238,16 @@ func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, cl *Container
 func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger) *utils.RuleMap {
 	rl := utils.NewRuleMap()
 	natCl := NewContainerList()
-	dhcpCl := NewContainerList()
+	//dhcpCl := NewContainerList()
 
-	go AcceptRegisterRequests(natCl, dhcpCl, &net.UDPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
+	natOutChan := make(chan *container, 50)
+	//dhcpOutChan := make(chan *container, 50)
+
+	cil := make(map[string]*ContainerInfo)
+	cil["nat"] = &ContainerInfo{natOutChan, natCl}
+	//cil["dhcp"] = &ContainerInfo{dhcpOutChan, dhcpCl}
+
+	go AcceptRegisterRequests(cil, &net.TCPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
 
 	// dhcpChan := make(chan []byte, 200)
 
@@ -205,7 +262,7 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 	// 	return trg == 67
 	// }, dhcpChan)
 
-	// go ActionHandler(dhcpChan, stopChan, dhcpCl, hostname, auth, "dhcp", logger)
+	// go ActionHandler(dhcpChan, stopChan, dhcpOutChan, dhcpCl, hostname, auth, "dhcp", logger)
 
 	natChan := make(chan []byte, 200)
 
@@ -220,7 +277,7 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 		return src != 53
 	}, natChan)
 
-	go ActionHandler(natChan, stopChan, natCl, hostname, auth, "nat", logger)
+	go ActionHandler(natChan, stopChan, natOutChan, natCl, hostname, auth, "nat", logger)
 
 	return rl
 }

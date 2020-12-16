@@ -7,8 +7,22 @@ import (
 )
 
 type container struct {
-	addr *net.IP
-	port uint16
+	addr   *net.IP
+	port   uint16
+	fluxes int8
+	mu     sync.RWMutex
+}
+
+func (c *container) IncFluxes() {
+	c.mu.Lock()
+	c.fluxes += 1
+	c.mu.Unlock()
+}
+
+func (c *container) DecFluxes() {
+	c.mu.Lock()
+	c.fluxes -= 1
+	c.mu.Unlock()
 }
 
 type ContainerMap struct {
