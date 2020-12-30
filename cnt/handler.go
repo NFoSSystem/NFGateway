@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"bitbucket.org/Manaphy91/nflib"
@@ -123,45 +124,82 @@ func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
 	}
 }
 
-func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *container, log *log.Logger) {
-	for {
-		select {
-		case pkt := <-incPkt:
-			utils.RLogger.Println("DEBUG 1 sendToContainer")
-			code, err := udp.PktCrc16(pkt)
-			if err != nil {
-				utils.RLogger.Printf("Error during calculation of CRC 16")
-				continue
-			}
-			utils.RLogger.Println("DEBUG 2 sendToContainer")
-			cnt, ok := cm.Get(code)
-			if !ok {
-				utils.RLogger.Println("DEBUG 2.5 sendToContainer")
-				cnt = <-cntChan
-				utils.RLogger.Println("DEBUG 2.6 sendToContainer")
-				go cm.Add(code, cnt)
-			}
-			utils.RLogger.Println("DEBUG 3 sendToContainer")
-			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
+// func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *container, log *log.Logger) {
+// 	for {
+// 		select {
+// 		case pkt := <-incPkt:
+// 			code, err := udp.PktCrc16(pkt)
+// 			if err != nil {
+// 				utils.RLogger.Printf("Error during calculation of CRC 16")
+// 				continue
+// 			}
+// 			cnt, ok := cm.Get(code)
+// 			if !ok {
+// 				cnt = <-cntChan
+// 				go cm.Add(code, cnt)
+// 			}
+// 			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
+// 			if err != nil {
+// 				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
+// 			}
+// 			_, err = conn.Write(pkt)
+// 			if err != nil {
+// 				utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
+// 				conn.Close()
+// 				continue
+// 			}
+// 			err = conn.Close()
+// 			if err != nil {
+// 				utils.RLogger.Printf("Error closing socket: %s\n", err)
+// 				continue
+// 			}
+// 			continue
+// 		}
+// 	}
+// }
+
+func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex sync.RWMutex, cntChan <-chan *container) {
+	code, err := udp.PktCrc16(pkt)
+	if err != nil {
+		utils.RLogger.Printf("Error during calculation of CRC 16")
+		return
+	}
+
+	mutex.RLock()
+	conn, ok := crcConnMap[code]
+	mutex.RUnlock()
+	if ok {
+		_, err := conn.Write(pkt)
+		if err != nil {
+			utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
+			return
+		}
+	} else {
+		mutex.Lock()
+		// perform one more check
+		conn, ok := crcConnMap[code]
+		if !ok {
+			cnt := <-cntChan
+			conn, err = net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
 			if err != nil {
 				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
 			}
-			utils.RLogger.Println("DEBUG 4 sendToContainer")
-			_, err = conn.Write(pkt)
-			if err != nil {
-				utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
-				conn.Close()
-				continue
-			}
-			utils.RLogger.Println("DEBUG 5 sendToContainer")
-			err = conn.Close()
-			if err != nil {
-				utils.RLogger.Printf("Error closing socket: %s\n", err)
-				continue
-			}
-			utils.RLogger.Println("DEBUG 6 sendToContainer")
-			utils.RLogger.Printf("Sent packet to %s:%d\n", (*cnt.addr), cnt.port)
-			continue
+			crcConnMap[code] = conn
+		}
+		mutex.Unlock()
+		_, err = conn.Write(pkt)
+		if err != nil {
+			utils.RLogger.Printf("Error writing packet to socket: %s\n", err)
+			return
+		}
+	}
+}
+
+func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *container, log *log.Logger, mutex sync.RWMutex, crcConnMap map[uint16]*net.UDPConn) {
+	for {
+		select {
+		case pkt := <-incPkt:
+			go sendToContainerHelper(pkt, crcConnMap, mutex, cntChan)
 		}
 	}
 }
@@ -228,8 +266,11 @@ func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, inChan <-chan
 
 	//go instantiateFunctions(hostname, auth, actionName, 1)
 
-	for i := 0; i < MAX_SENDER; i++ {
-		go sendToContainer(cm, incPkt, cntChan, logger)
+	var mutex sync.RWMutex
+	var crcConnMap map[uint16]*net.UDPConn = make(map[uint16]*net.UDPConn)
+
+	for i := 0; i < 10; i++ {
+		go sendToContainer(cm, incPkt, cntChan, logger, mutex, crcConnMap)
 	}
 
 	<-stopChan

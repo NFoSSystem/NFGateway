@@ -7,7 +7,11 @@ import (
 	"strings"
 
 	"faasrouter/utils"
+
+	"bitbucket.org/Manaphy91/nflib"
 )
+
+var Counter uint32 = 0
 
 // Arguments:
 // - hostname
@@ -20,7 +24,18 @@ func CreateFunction(hostname, auth, action string) error {
 
 	endpoint := makeEndpointString(hostname, action)
 
-	reqBody := strings.NewReader("{\"address\":\"172.17.0.1\", \"port\":\"9082\"}")
+	Counter++
+	addrPtr := Counter
+
+	var paramStr string = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"abcd\":\"efgh\"}"
+	if action == "nat" {
+		leasedPorts := utils.CPMap.AssignPorts(&addrPtr)
+		leasedPortsString := nflib.GetStringFromPortSlice(leasedPorts)
+		paramStr = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"leasedPorts\":\"" +
+			leasedPortsString + "\"}"
+	}
+
+	reqBody := strings.NewReader(paramStr)
 	req, err := http.NewRequest("POST", endpoint, reqBody)
 	if err != nil {
 		utils.RLogger.Fatalf("Error creating new POST request!\nExit from application")

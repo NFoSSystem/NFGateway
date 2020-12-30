@@ -1,8 +1,15 @@
 package utils
 
-import "log"
+import (
+	"faasrouter/nat"
+	"log"
+	"time"
+)
 
 var RLogger *log.Logger
+
+var CPMap *nat.CntPortMapping
+var PCMap *nat.PortCntMapping
 
 func init() {
 	var err error
@@ -10,4 +17,9 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	CPMap = nat.NewCntPortMapping()
+	PCMap = nat.NewPortCntMapping(120 * time.Second)
+
+	go nat.ListenForMappingRequests(CPMap, PCMap)
 }

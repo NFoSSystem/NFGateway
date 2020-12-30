@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"net"
 	"os"
@@ -34,37 +35,41 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error opening UDP connection on port %d: %s\n", port)
 		}
+		defer conn.Close()
 
 		bytesReceived := 0
-		buff := make([]byte, 1460)
+		buff := make([]byte, 1100)
 		var testRunning bool = true
 		var pktNum int = 0
 
-		var startTime int64
+		var startTime int64 = 0
+		var endTime int64 = 0
 		for testRunning {
 			size, err := conn.Read(buff)
 			if err != nil {
+				if isDeadlineExceeded(err) {
+					goto result
+				}
+
 				log.Printf("Error reading from UDP socket: %s\n", err)
 				continue
 			}
+
 			if startTime == 0 {
 				startTime = time.Now().UnixNano()
 				time.AfterFunc(10*time.Second, func() {
+					endTime = time.Now().UnixNano()
 					testRunning = false
 				})
+				conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			}
 
 			pktNum++
 			bytesReceived += size
 		}
 
-		size, err := conn.Read(buff)
-		if err != nil {
-			log.Printf("Error reading from UDP socket: %s\n", err)
-		}
-		bytesReceived += size
+	result:
 		elapsedTime := time.Now().UnixNano() - startTime
-
 		log.Printf("Packets received: %d - Bytes received: %d - Throughtput calculated: %.2f\n", pktNum,
 			bytesReceived, calculateThroughput(bytesReceived, elapsedTime))
 	} else {
@@ -72,9 +77,9 @@ func main() {
 			log.Fatalln("Error too few parameters!")
 		}
 
-		buff := make([]byte, 1460)
+		buff := make([]byte, 1100)
 		buff[0] = 1
-		buff[1459] = 1
+		buff[1023] = 1
 
 		addr := net.ParseIP(args[2])
 		if args[2] == "" || addr == nil {
@@ -93,22 +98,28 @@ func main() {
 		defer conn.Close()
 
 		timeOut := false
+		messagesSent := 0
+		bytesSent := 0
 		startTime := time.Now().UnixNano()
+
 		time.AfterFunc(10*time.Second, func() {
 			timeOut = true
 		})
-		bytesSent := 0
 		for !timeOut {
+			time.Sleep(250 * time.Nanosecond)
+			//time.Sleep(400 * time.Nanosecond)
+			//time.Sleep(500 * time.Nanosecond)
 			size, err := conn.Write(buff)
 			if err != nil {
 				log.Fatalf("Error writing buff to UDP socket headed to %s:%d: %s\n", addr, port, err)
 			}
 			bytesSent += size
-
+			messagesSent++
 		}
 
 		elapsedTime := time.Now().UnixNano() - startTime
-		log.Printf("Throughtput calculated: %.2f\n", calculateThroughput(bytesSent, elapsedTime))
+		log.Printf("Packets sent: %d - Bytes sent: %d - Throughtput calculated: %.2f\n",
+			messagesSent, bytesSent, calculateThroughput(bytesSent, elapsedTime))
 	}
 }
 
@@ -130,4 +141,21 @@ func terminateTestAtReceiver(remoteAddr *net.IP, stopChan chan struct{}) {
 		return
 	}
 	close(stopChan)
+}
+
+// isDeadlineExceeded reports whether err is or wraps os.ErrDeadlineExceeded.
+// We also check that the error implements net.Error, and that the
+// Timeout method returns true.
+func isDeadlineExceeded(err error) bool {
+	nerr, ok := err.(net.Error)
+	if !ok {
+		return false
+	}
+	if !nerr.Timeout() {
+		return false
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		return false
+	}
+	return true
 }
