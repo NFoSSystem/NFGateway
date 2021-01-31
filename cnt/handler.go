@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	op "faasrouter/openwhisk"
-	"faasrouter/udp"
 	"faasrouter/utils"
 	"fmt"
 	"log"
@@ -82,16 +81,37 @@ func addEntryToChan(cil map[string]*ContainerInfo, buff []byte, size int) {
 	tMsg := nflib.GetMsgFromBytes(buff[:size])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
-	cnt := &container{addr: &ipAddr, port: tMsg.Port, fluxes: 1}
+	cnt := &utils.Container{Addr: &ipAddr, Port: tMsg.Port, Fluxes: 0}
 	actionName := trimActionName(fmt.Sprintf("%s", tMsg.Name))
 
 	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d action %s\n", ipAddr, tMsg.Port, actionName)
 
-	cil[actionName].cntChan <- cnt
 	cil[actionName].cntLst.AddContainer(cnt)
+	connPoolElem := cil[actionName].cntPool.Add(UDPConnFactory(&ipAddr, int(tMsg.Port)), cnt)
 
+	stopChan := make(chan struct{})
+
+	go func() {
+		time.AfterFunc((MAX_ACTION_RUNTIME_IN_SECONDS-5)*time.Second, func() {
+			utils.RLogger.Printf("Before deleting function %s at address %s\n", actionName, ipAddr.String())
+			cil[actionName].cntLst.RemoveContainer(cnt)
+			connPoolElem.Delete()
+			close(stopChan)
+		})
+	}()
+
+	<-stopChan
 	// release the acquired buffer as soon as it is not useful anymore
 	//b.Release()
+}
+
+func UDPConnFactory(addr *net.IP, port int) *net.UDPConn {
+	conn, err := net.DialUDP("udp", nil, &net.UDPAddr{*addr, port, ""})
+	if err != nil {
+		utils.RLogger.Printf("Error opening UDP connection to %s:%d: %s\n", err)
+		return nil
+	}
+	return conn
 }
 
 func trimActionName(actionName string) string {
@@ -111,7 +131,6 @@ func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
 	}
 	defer lstn.Close()
 
-	utils.RLogger.Println("DEBUG Opened TCP socket at %s:%d\n", addr.IP, addr.Port, err)
 	for {
 		conn, err := lstn.AcceptTCP()
 		if err != nil {
@@ -158,8 +177,8 @@ func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
 // 	}
 // }
 
-func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex sync.RWMutex, cntChan <-chan *container) {
-	code, err := udp.PktCrc16(pkt)
+func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex sync.RWMutex, cntChan <-chan *utils.Container) {
+	code, err := utils.PktCrc16(pkt)
 	if err != nil {
 		utils.RLogger.Printf("Error during calculation of CRC 16")
 		return
@@ -180,9 +199,9 @@ func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex
 		conn, ok := crcConnMap[code]
 		if !ok {
 			cnt := <-cntChan
-			conn, err = net.DialUDP("udp", nil, &net.UDPAddr{*cnt.addr, int(cnt.port), ""})
+			conn, err = net.DialUDP("udp", nil, &net.UDPAddr{*cnt.Addr, int(cnt.Port), ""})
 			if err != nil {
-				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.addr, int(cnt.port), err)
+				utils.RLogger.Printf("Error sending message to %s:%d: %s\n", *cnt.Addr, int(cnt.Port), err)
 			}
 			crcConnMap[code] = conn
 		}
@@ -195,7 +214,14 @@ func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex
 	}
 }
 
-func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *container, log *log.Logger, mutex sync.RWMutex, crcConnMap map[uint16]*net.UDPConn) {
+func SendToContainer3(pkt []byte, conn *net.UDPConn) {
+	_, err := conn.Write(pkt)
+	if err != nil {
+		utils.RLogger.Fatalf("Error sending message to UDP socket: %s\n", err)
+	}
+}
+
+func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *utils.Container, log *log.Logger, mutex sync.RWMutex, crcConnMap map[uint16]*net.UDPConn) {
 	for {
 		select {
 		case pkt := <-incPkt:
@@ -204,12 +230,12 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *con
 	}
 }
 
-func instantiateFunctions(hostname, auth, actionName string, instances int) {
+func instantiateFunctions(hostname, auth, actionName, redisIp string, redisPort int, instances int) {
 	timeout := time.NewTicker(ACTION_TRIGGER_TIMEOUT_IN_SECONDS * time.Second)
 
 	for {
 		for i := 0; i < instances; i++ {
-			err := op.CreateFunction(hostname, auth, actionName)
+			err := op.CreateFunction(hostname, auth, actionName, redisIp, redisPort)
 			if err != nil {
 				utils.RLogger.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
 					actionName)
@@ -234,7 +260,7 @@ func instantiateFunctions(hostname, auth, actionName string, instances int) {
 // 	}
 // }
 
-func handleContainerPool(inChan <-chan *container, outChan chan<- *container) {
+func handleContainerPool(inChan <-chan *utils.Container, outChan chan<- *utils.Container) {
 	for {
 		select {
 		case cnt := <-inChan:
@@ -243,49 +269,40 @@ func handleContainerPool(inChan <-chan *container, outChan chan<- *container) {
 	}
 }
 
-func ActionHandler(incPkt <-chan []byte, stopChan <-chan struct{}, inChan <-chan *container, cl *ContainerList, hostname, auth, actionName string, logger *log.Logger) {
-	cntChan := make(chan *container, 50)
-	cm := NewContainerMap(time.Duration(60 * time.Second))
-
-	go handleContainerPool(inChan, cntChan)
-
+func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, actionName, redisIp string, redisPort int, logger *log.Logger) {
 	p := new(Provisioner)
 	p.Hostname = hostname
 	p.Auth = auth
 	p.Action = actionName
-	p.Check = 100 * time.Millisecond
-	p.Timeout = 55 * time.Second
+	p.Check = 5 * time.Second
+	p.Timeout = 45 * time.Second
 	p.UpThr = 0.6
 	p.DownThr = 0.3
 	p.UpInc = 0.5
 	p.DownInc = 0.4
 	p.Min = 1
 	p.Cl = cl
+	p.RedisIp = redisIp
+	p.RedisPort = redisPort
 
 	go p.InstantiateFunctions()
 
 	//go instantiateFunctions(hostname, auth, actionName, 1)
 
-	var mutex sync.RWMutex
-	var crcConnMap map[uint16]*net.UDPConn = make(map[uint16]*net.UDPConn)
-
-	for i := 0; i < 10; i++ {
-		go sendToContainer(cm, incPkt, cntChan, logger, mutex, crcConnMap)
-	}
-
 	<-stopChan
 }
 
-func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger) *utils.RuleMap {
+func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger, redisIp string, redisPort int) *utils.RuleMap {
 	rl := utils.NewRuleMap()
 	natCl := NewContainerList()
 	//dhcpCl := NewContainerList()
 
-	natOutChan := make(chan *container, 50)
+	natCrc2ConnMap, natConnPool := utils.NewCrc2ConnMap()
+
 	//dhcpOutChan := make(chan *container, 50)
 
 	cil := make(map[string]*ContainerInfo)
-	cil["nat"] = &ContainerInfo{natOutChan, natCl}
+	cil["nat"] = &ContainerInfo{natConnPool, natCl}
 	//cil["dhcp"] = &ContainerInfo{dhcpOutChan, dhcpCl}
 
 	go AcceptRegisterRequests(cil, &net.TCPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
@@ -305,8 +322,6 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 
 	// go ActionHandler(dhcpChan, stopChan, dhcpOutChan, dhcpCl, hostname, auth, "dhcp", logger)
 
-	natChan := make(chan []byte, 200)
-
 	rl.Add(func(pkt []byte) bool {
 		src, _, err := utils.GetPortsFromPkt(pkt)
 		if err != nil {
@@ -316,9 +331,9 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 
 		// filter out incoming messages having 53 as source port
 		return src != 53
-	}, natChan)
+	}, natCrc2ConnMap)
 
-	go ActionHandler(natChan, stopChan, natOutChan, natCl, hostname, auth, "nat", logger)
+	go ActionHandler(stopChan, natCl, hostname, auth, "nat", redisIp, redisPort, logger)
 
 	return rl
 }

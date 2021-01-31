@@ -1,6 +1,10 @@
 package cnt
 
+import (
+	"faasrouter/utils"
+)
+
 type ContainerInfo struct {
-	cntChan chan<- *container
+	cntPool *utils.ConnPool
 	cntLst  *ContainerList
 }

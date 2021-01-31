@@ -1,41 +1,15 @@
 package udp
 
 import (
+	"faasrouter/cnt"
 	"faasrouter/utils"
-	"fmt"
 	"log"
 	"net"
-
-	"github.com/howeyc/crc16"
 )
 
 const (
 	MAX_UDP_PACKET_SIZE = 65535
 )
-
-/*
-PktCrc16 calculates Crc16 from source IP, target IP, source port and target port from provided packet.
-*/
-func PktCrc16(buff []byte) (uint16, error) {
-	bSlice := make([]byte, 12)
-
-	srcIP, trgIP, err := utils.GetIPsFromPkt(buff)
-	if err != nil {
-		return uint16(0), fmt.Errorf("Error reading IP addresses from packet!")
-	}
-
-	src, trg, err := utils.GetPortsFromPkt(buff)
-	if err != nil {
-		return uint16(0), fmt.Errorf("Error reading source and target addresses from packet!")
-	}
-
-	bSlice = append(bSlice, []byte(srcIP)...)
-	bSlice = append(bSlice, []byte(trgIP)...)
-	bSlice = append(bSlice, uint8(src>>8), uint8(src&255))
-	bSlice = append(bSlice, uint8(trg>>8), uint8(trg&255))
-
-	return crc16.ChecksumIBM(bSlice), nil
-}
 
 func OpenSocketOnPort() {
 	stopChan := make(chan struct{})
@@ -112,6 +86,6 @@ func HandleIncomingRequestsFromIPv4(pktBuff []byte, ruleMap *utils.RuleMap, logg
 		return
 	}
 
-	outChan <- pktBuff
+	cnt.SendToContainer3(pktBuff, outChan)
 	//utils.RLogger.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
 }

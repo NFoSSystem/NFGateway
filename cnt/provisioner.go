@@ -11,9 +11,7 @@ import (
 
 func calculateScalingDelta(cl *ContainerList, upThr, downThr float64, upInc, downDec float64, min int) int {
 	s, lp := cl.GetLoadPercentage()
-	if lp > 0 {
-		utils.RLogger.Printf("Calculated scaling delta - n° of actions %d - load percentage %d\n", s, lp)
-	}
+	utils.RLogger.Printf("Calculated scaling delta - n° of actions %d - load percentage %f\n", s, lp)
 	if lp >= upThr {
 		return int(math.Ceil(float64(s) * upInc))
 	} else if lp <= downThr {
@@ -28,17 +26,19 @@ func calculateScalingDelta(cl *ContainerList, upThr, downThr float64, upInc, dow
 }
 
 type Provisioner struct {
-	Action   string
-	Hostname string
-	Auth     string
-	Timeout  time.Duration
-	Check    time.Duration
-	Cl       *ContainerList
-	UpThr    float64
-	DownThr  float64
-	UpInc    float64
-	DownInc  float64
-	Min      int
+	Action    string
+	Hostname  string
+	Auth      string
+	Timeout   time.Duration
+	Check     time.Duration
+	Cl        *ContainerList
+	UpThr     float64
+	DownThr   float64
+	UpInc     float64
+	DownInc   float64
+	Min       int
+	RedisIp   string
+	RedisPort int
 }
 
 func (p *Provisioner) HandleScaling(check time.Duration, cl *ContainerList, increment chan<- int) {
@@ -48,9 +48,6 @@ func (p *Provisioner) HandleScaling(check time.Duration, cl *ContainerList, incr
 		select {
 		case <-checkT.C:
 			res := calculateScalingDelta(cl, p.UpThr, p.DownThr, p.UpInc, p.DownInc, p.Min)
-			if res > 0 {
-				utils.RLogger.Printf("Scaling check - Scaling delta %d\n", res)
-			}
 			increment <- res
 		}
 	}
@@ -61,12 +58,12 @@ type Instance struct {
 	stopChan chan<- int
 }
 
-func startDropFunction(action, hostname, auth string, size int, timeout time.Duration, stopChan <-chan int) {
+func startDropFunction(action, hostname, auth string, size int, timeout time.Duration, redisIp string, redisPort int, stopChan <-chan int) {
 	timeoutT := time.NewTicker(timeout)
 	uId := uuid.New()
 
 	for i := 0; i < size; i++ {
-		err := op.CreateFunction(hostname, auth, action)
+		err := op.CreateFunction(hostname, auth, action, redisIp, redisPort)
 		if err != nil {
 			utils.RLogger.Printf("[%s] Error creating function on OpenWhisk at hostname %s for action %s: %s\n", uId.String(), hostname,
 				action, err)
@@ -80,7 +77,7 @@ func startDropFunction(action, hostname, auth string, size int, timeout time.Dur
 		case <-timeoutT.C:
 			utils.RLogger.Printf("[%s] Creation of %d %s function\n", uId.String(), size, action)
 			for i := 0; i < size; i++ {
-				err := op.CreateFunction(hostname, auth, action)
+				err := op.CreateFunction(hostname, auth, action, redisIp, redisPort)
 				if err != nil {
 					utils.RLogger.Printf("[%s] Error creating function on OpenWhisk at hostname %s for action %s: %s\n", uId.String(), hostname,
 						action, err)
@@ -107,8 +104,7 @@ func (p *Provisioner) InstantiateFunctions() {
 
 	stopChan := make(chan int)
 	iSlice = append(iSlice, Instance{int(p.Min), stopChan})
-	utils.RLogger.Println("Before function instantiation")
-	go startDropFunction(p.Action, p.Hostname, p.Auth, int(p.Min), p.Timeout, stopChan)
+	go startDropFunction(p.Action, p.Hostname, p.Auth, int(p.Min), p.Timeout, p.RedisIp, p.RedisPort, stopChan)
 
 	for {
 		select {
@@ -116,7 +112,7 @@ func (p *Provisioner) InstantiateFunctions() {
 			if delta > 0 {
 				stopChan = make(chan int)
 				iSlice = append(iSlice, Instance{delta, stopChan})
-				go startDropFunction(p.Action, p.Hostname, p.Auth, int(p.Min), p.Timeout, stopChan)
+				go startDropFunction(p.Action, p.Hostname, p.Auth, int(p.Min), p.Timeout, p.RedisIp, p.RedisPort, stopChan)
 			} else if delta < 0 {
 				for _, i := range iSlice {
 					if i.size >= delta {

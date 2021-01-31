@@ -20,6 +20,4 @@ func init() {
 
 	CPMap = nat.NewCntPortMapping()
 	PCMap = nat.NewPortCntMapping(120 * time.Second)
-
-	go nat.ListenForMappingRequests(CPMap, PCMap)
 }

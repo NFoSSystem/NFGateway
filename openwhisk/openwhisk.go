@@ -1,9 +1,11 @@
 package openwhisk
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"faasrouter/utils"
@@ -19,20 +21,34 @@ var Counter uint32 = 0
 // - action name
 // - param
 // - value
-func CreateFunction(hostname, auth, action string) error {
-	cl := &http.Client{}
+func CreateFunction(hostname, auth, action, redisIp string, redisPort int) error {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	cl := &http.Client{Transport: tr}
 
 	endpoint := makeEndpointString(hostname, action)
 
 	Counter++
 	addrPtr := Counter
 
-	var paramStr string = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"abcd\":\"efgh\"}"
+	// var paramStr string = "{\"address\":\"172.18.0.1\", \"port\":\"9082\", \"abcd\":\"efgh\"}"
+	// if action == "nat" {
+	// 	leasedPorts := utils.CPMap.AssignPorts(&addrPtr)
+	// 	leasedPortsString := nflib.GetStringFromPortSlice(leasedPorts)
+	// 	paramStr = "{\"address\":\"172.18.0.1\", \"port\":\"9082\", \"leasedPorts\":\"" +
+	// 		leasedPortsString + "\"}"
+	// }
+
+	var paramStr string = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"redisIp\":\"" + redisIp + "\"," + "\"redisPort\":" +
+		strconv.Itoa(redisPort) + "}"
 	if action == "nat" {
 		leasedPorts := utils.CPMap.AssignPorts(&addrPtr)
 		leasedPortsString := nflib.GetStringFromPortSlice(leasedPorts)
 		paramStr = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"leasedPorts\":\"" +
-			leasedPortsString + "\"}"
+			leasedPortsString + "\", \"redisIp\":\"" + redisIp + "\"," + "\"redisPort\":" +
+			strconv.Itoa(redisPort) + "}"
 	}
 
 	reqBody := strings.NewReader(paramStr)
@@ -50,6 +66,11 @@ func CreateFunction(hostname, auth, action string) error {
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
+		text, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			utils.RLogger.Fatal("Error reading response to POST request\nExit from application")
+		}
+		utils.RLogger.Printf("Content of response: %s\n", text)
 		return fmt.Errorf("Error StatusCode different by 200: %d\n", resp.StatusCode)
 	}
 

@@ -3,38 +3,41 @@ package main
 import (
 	"faasrouter/cnt"
 	"faasrouter/initnf"
+	"faasrouter/nat"
 	"faasrouter/udp"
 	"faasrouter/utils"
 	"log"
 	"net"
 	"os"
+	"regexp"
+	"strconv"
 
 	"github.com/mdlayher/ethernet"
 	"github.com/mdlayher/raw"
 )
 
-var RLogger *log.Logger
-
 func main() {
 
 	args := os.Args[1:]
 	len := len(args)
-	if len < 3 {
+	if len < 4 {
 		log.Fatalf("Error provided parameter are not enough, expected 4, provided %d\n", len)
 	}
 
 	ninf := args[0]
 	hostname := args[1]
 	auth := args[2]
+	redisIp, redisPort := parseRedisAddressParam(args[3])
 
 	stop := make(chan struct{})
 
 	initnf.InitNat()
 	initnf.InitDhcp()
 
-	rl := cnt.InitRuleMap(stop, hostname, auth, RLogger)
+	rl := cnt.InitRuleMap(stop, hostname, auth, utils.RLogger, redisIp, redisPort)
 	//go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)
-	readFromNetworkInterface(ninf, rl, RLogger)
+	go nat.ListenForMappingRequests(utils.CPMap, utils.PCMap)
+	readFromNetworkInterface(ninf, rl, utils.RLogger)
 }
 
 func readFromNetworkInterface(interfaceName string, rl *utils.RuleMap, RLogger *log.Logger) {
@@ -72,4 +75,19 @@ func readFromNetworkInterface(interfaceName string, rl *utils.RuleMap, RLogger *
 			go udp.HandleIncomingRequestsFromIPv4(ipBuff, rl, RLogger)
 		}
 	}
+}
+
+func parseRedisAddressParam(redisAddress string) (string, int) {
+	rex := regexp.MustCompile("(.*):(\\d+)")
+	matches := rex.FindStringSubmatch(redisAddress)
+	if matches == nil || len(matches) < 3 {
+		utils.RLogger.Fatalf("Error parsing redis address provided as paramter: %s\n", redisAddress)
+	}
+
+	port, err := strconv.Atoi(matches[2])
+	if err != nil {
+		utils.RLogger.Fatalf("Error parsing redis address provided as paramter: %s\n", redisAddress)
+	}
+
+	return matches[1], port
 }

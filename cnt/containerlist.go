@@ -1,11 +1,12 @@
 package cnt
 
 import (
+	"faasrouter/utils"
 	"sync"
 )
 
 type ContainerList struct {
-	lst      []*container
+	lst      []*utils.Container
 	mu       sync.RWMutex
 	duration uint64
 }
@@ -16,13 +17,27 @@ func NewContainerList() *ContainerList {
 	return cl
 }
 
-func (cl *ContainerList) AddContainer(cnt *container) {
+func (cl *ContainerList) AddContainer(cnt *utils.Container) {
 	cl.mu.Lock()
 	cl.lst = append(cl.lst, cnt)
 	cl.mu.Unlock()
 }
 
-func (cl *ContainerList) GetList() []*container {
+func (cl *ContainerList) RemoveContainer(cnt *utils.Container) {
+	cl.mu.Lock()
+	for idx, val := range cl.lst {
+		if val == cnt {
+			if idx != len(cl.lst)-1 {
+				cl.lst = append(cl.lst[:idx], cl.lst[idx+1:]...)
+			} else {
+				cl.lst = cl.lst[:idx]
+			}
+		}
+	}
+	cl.mu.Unlock()
+}
+
+func (cl *ContainerList) GetList() []*utils.Container {
 	return cl.lst
 }
 
@@ -40,7 +55,7 @@ func min(a, b int8) int8 {
 	}
 }
 
-func (cl *ContainerList) GetContainer() *container {
+func (cl *ContainerList) GetContainer() *utils.Container {
 	for {
 		if cl.Empty() {
 			continue
@@ -51,16 +66,16 @@ func (cl *ContainerList) GetContainer() *container {
 		length := len(cl.lst)
 		var i int
 		for i = length - 1; i > 0; i-- {
-			cl.lst[i].mu.RLock()
-			cl.lst[i-1].mu.RLock()
-			fMin := min(cl.lst[i].fluxes, cl.lst[i-1].fluxes)
-			if fMin != cl.lst[i-1].fluxes {
-				defer cl.lst[i-1].mu.RUnlock()
-				defer cl.lst[i].mu.RUnlock()
+			cl.lst[i].Mu.RLock()
+			cl.lst[i-1].Mu.RLock()
+			fMin := min(cl.lst[i].Fluxes, cl.lst[i-1].Fluxes)
+			if fMin != cl.lst[i-1].Fluxes {
+				defer cl.lst[i-1].Mu.RUnlock()
+				defer cl.lst[i].Mu.RUnlock()
 				return cl.lst[i-1]
 			} else {
-				cl.lst[i-1].mu.RUnlock()
-				cl.lst[i].mu.RUnlock()
+				cl.lst[i-1].Mu.RUnlock()
+				cl.lst[i].Mu.RUnlock()
 			}
 		}
 
@@ -74,12 +89,12 @@ func (cl *ContainerList) GetLoadPercentage() (int, float64) {
 	sum := int8(0)
 	cl.mu.RLock()
 	for _, cnt := range cl.lst {
-		sum += min(1, cnt.fluxes)
+		sum += min(1, cnt.Fluxes)
 	}
 
 	length := len(cl.lst)
 
-	defer cl.mu.RLock()
+	cl.mu.RUnlock()
 	return length, float64(sum) / float64(length)
 }
 

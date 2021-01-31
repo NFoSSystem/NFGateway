@@ -1,13 +1,11 @@
 package nat
 
 import (
-	"io"
 	"log"
 	"net"
 	"sync"
 	"time"
 
-	"bitbucket.org/Manaphy91/nflib"
 	"github.com/willf/bitset"
 )
 
@@ -198,27 +196,29 @@ func ListenForMappingRequests(cp *CntPortMapping, pc *PortCntMapping) {
 	}
 	defer lstn.Close()
 
-	buff := make([]byte, 1500)
+	//buff := make([]byte, 1500)
 
 	for {
-		conn, err := lstn.AcceptTCP()
+		_, err = lstn.AcceptTCP()
 		if err != nil {
 			log.Fatalf("Error accepting TCP connection: %s\n", err)
 		}
 
-		size, err := conn.Read(buff)
-		if err == io.EOF {
-			continue
-		} else if err != nil {
-			log.Fatalf("Error reading from TCP socket: %s\n", err)
-		}
+		// size, err := conn.Read(buff)
+		// if err == io.EOF {
+		// 	log.Println("DEBUG Read loop 2")
+		// 	continue
+		// } else if err != nil {
+		// 	log.Println("DEBUG Read loop 3")
+		// 	log.Fatalf("Error reading from TCP socket: %s\n", err)
+		// }
 
-		pkt := nflib.GetPacketFromBytes(buff[:size])
+		// pkt := nflib.GetPacketFromBytes(buff[:size])
 
-		go func(pkt *nflib.Packet) {
-			nc := &NatCouple{pkt.Crc16, pkt.Port}
-			cp.Set(pkt.Addr, nc)
-			pc.Set(pkt.Port, pkt.Addr)
-		}(pkt)
+		// go func(pkt *nflib.Packet) {
+		// 	nc := &NatCouple{pkt.Crc16, pkt.Port}
+		// 	cp.Set(pkt.Addr, nc)
+		// 	pc.Set(pkt.Port, pkt.Addr)
+		// }(pkt)
 	}
 }

@@ -1,39 +1,20 @@
 package cnt
 
 import (
-	"net"
+	"faasrouter/utils"
 	"sync"
 	"time"
 )
 
-type container struct {
-	addr   *net.IP
-	port   uint16
-	fluxes int8
-	mu     sync.RWMutex
-}
-
-func (c *container) IncFluxes() {
-	c.mu.Lock()
-	c.fluxes += 1
-	c.mu.Unlock()
-}
-
-func (c *container) DecFluxes() {
-	c.mu.Lock()
-	c.fluxes -= 1
-	c.mu.Unlock()
-}
-
 type ContainerMap struct {
-	im      map[uint16]*container
+	im      map[uint16]*utils.Container
 	mu      sync.RWMutex
 	timeout *time.Duration
 }
 
 func NewContainerMap(timeout time.Duration) *ContainerMap {
 	res := new(ContainerMap)
-	res.im = make(map[uint16]*container)
+	res.im = make(map[uint16]*utils.Container)
 	res.timeout = &timeout
 	return res
 }
@@ -50,7 +31,7 @@ func cleanEntry(cp *ContainerMap, key uint16, timerPtr <-chan time.Time, stop <-
 	}
 }
 
-func (cpm *ContainerMap) Add(crc uint16, cnt *container) {
+func (cpm *ContainerMap) Add(crc uint16, cnt *utils.Container) {
 	cpm.mu.Lock()
 	timer := time.NewTimer(*(cpm.timeout)).C
 	stop := make(chan struct{})
@@ -59,7 +40,7 @@ func (cpm *ContainerMap) Add(crc uint16, cnt *container) {
 	cpm.mu.Unlock()
 }
 
-func (cpm *ContainerMap) Get(crc uint16) (*container, bool) {
+func (cpm *ContainerMap) Get(crc uint16) (*utils.Container, bool) {
 	cpm.mu.Lock()
 	defer cpm.mu.Unlock()
 	if res, ok := cpm.im[crc]; ok {
