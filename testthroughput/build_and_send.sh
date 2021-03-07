@@ -6,5 +6,5 @@ cd ..
 cd ip
 go build ip2ip.go
 cd ..
-scp eth/eth2ip abanfi8@c220g2-011016.wisc.cloudlab.us:/users/abanfi8/.
-scp ip/ip2ip abanfi8@c220g2-011016.wisc.cloudlab.us:/users/abanfi8/.
+scp eth/eth2ip abanfi8@c220g2-011006.wisc.cloudlab.us:/users/abanfi8/.
+scp ip/ip2ip abanfi8@c220g2-011006.wisc.cloudlab.us:/users/abanfi8/.

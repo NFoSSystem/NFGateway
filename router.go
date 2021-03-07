@@ -10,7 +10,9 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"strconv"
+	"time"
 
 	"github.com/mdlayher/ethernet"
 	"github.com/mdlayher/raw"
@@ -24,12 +26,22 @@ func main() {
 		log.Fatalf("Error provided parameter are not enough, expected 4, provided %d\n", len)
 	}
 
-	ninf := args[0]
-	hostname := args[1]
-	auth := args[2]
-	redisIp, redisPort := parseRedisAddressParam(args[3])
+	hostname := args[0]
+	auth := args[1]
+	redisIp, redisPort := parseRedisAddressParam(args[2])
+	ninf := args[3:]
+
+	go func() {
+		tick := time.NewTicker(5 * time.Second)
+		for {
+			<-tick.C
+			debug.FreeOSMemory()
+		}
+	}()
 
 	stop := make(chan struct{})
+
+	log.Printf("Starting faasrouter at %d", time.Now().UnixNano())
 
 	initnf.InitNat()
 	initnf.InitDhcp()
@@ -37,7 +49,11 @@ func main() {
 	rl := cnt.InitRuleMap(stop, hostname, auth, utils.RLogger, redisIp, redisPort)
 	//go tcp.HandleIncomingRequestsFromIPv4(addr, incPktChan, rLogger)
 	go nat.ListenForMappingRequests(utils.CPMap, utils.PCMap)
-	readFromNetworkInterface(ninf, rl, utils.RLogger)
+
+	for _, ni := range ninf {
+		go readFromNetworkInterface(ni, rl, utils.RLogger)
+	}
+	<-stop
 }
 
 func readFromNetworkInterface(interfaceName string, rl *utils.RuleMap, RLogger *log.Logger) {
@@ -72,7 +88,11 @@ func readFromNetworkInterface(interfaceName string, rl *utils.RuleMap, RLogger *
 		switch ipBuff[9] {
 		case 17:
 			// UDP
-			go udp.HandleIncomingRequestsFromIPv4(ipBuff, rl, RLogger)
+			if buff[23] == 67 {
+				go udp.HandleIncomingRequestsFromIPv4(buff, rl, RLogger)
+			} else {
+				go udp.HandleIncomingRequestsFromIPv4(ipBuff, rl, RLogger)
+			}
 		}
 	}
 }

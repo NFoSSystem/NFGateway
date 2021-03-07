@@ -2,11 +2,17 @@ package utils
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/howeyc/crc16"
+	"golang.org/x/sync/semaphore"
+)
+
+const (
+	MAX_ACTION_RUNTIME_IN_SECONDS = 60
 )
 
 type Container struct {
@@ -14,6 +20,8 @@ type Container struct {
 	Port   uint16
 	Fluxes int8
 	Mu     sync.RWMutex
+	Id     uint16
+	Repl   bool
 }
 
 func (c *Container) IncFluxes() {
@@ -35,53 +43,66 @@ func (c *Container) DecFluxes() {
 type Crc2ConnMap struct {
 	mu              sync.RWMutex
 	crc2conn        map[uint16]*net.UDPConn
+	crc2lock        map[uint16]*semaphore.Weighted
 	connPool        *ConnPool
 	crcFluxUsageMap map[uint16]int64
+	fluxMaxAge      time.Duration
 }
 
-func NewCrc2ConnMap() (*Crc2ConnMap, *ConnPool) {
+func NewCrc2ConnMap(fluxMaxAge time.Duration) (*Crc2ConnMap, *ConnPool) {
 	res := new(Crc2ConnMap)
 	res.crc2conn = make(map[uint16]*net.UDPConn)
+	res.crc2lock = make(map[uint16]*semaphore.Weighted)
 	res.connPool = NewConnPool(res)
 	res.crcFluxUsageMap = make(map[uint16]int64)
+	res.fluxMaxAge = fluxMaxAge
 	return res, res.connPool
 }
 
-func (c2cm *Crc2ConnMap) Get(crc uint16) *net.UDPConn {
+func (c2cm *Crc2ConnMap) Get(crc uint16) (*net.UDPConn, *semaphore.Weighted) {
 	c2cm.mu.RLock()
 	val, ok := c2cm.crc2conn[crc]
+	lock, _ := c2cm.crc2lock[crc]
 	c2cm.mu.RUnlock()
 	c2cm.mu.Lock()
 	c2cm.crcFluxUsageMap[crc] = time.Now().UnixNano()
 	c2cm.mu.Unlock()
 	if ok {
-		return val
+		return val, lock
 	} else {
 		cpe := c2cm.connPool.Next()
 		cpe.AddCrc(crc)
 		c2cm.mu.Lock()
 		c2cm.crc2conn[crc] = cpe.conn
+		sem := semaphore.NewWeighted(1000000)
+		c2cm.crc2lock[crc] = sem
 		c2cm.mu.Unlock()
 		cpe.container.IncFluxes()
 		go func(timeout time.Duration) {
 			t := time.NewTicker(timeout)
 			for {
-				<-t.C
-				c2cm.mu.RLock()
-				if timestamp, okT := c2cm.crcFluxUsageMap[crc]; okT {
+				select {
+				case <-cpe.stopChan:
+					return
+				case <-t.C:
+					c2cm.mu.RLock()
+					timestamp, okT := c2cm.crcFluxUsageMap[crc]
 					c2cm.mu.RUnlock()
-					deltaT := time.Now().UnixNano() - timestamp
-					if deltaT > int64(timeout) {
-						cpe.container.DecFluxes()
-						c2cm.mu.Lock()
-						delete(c2cm.crc2conn, crc)
-						c2cm.mu.Unlock()
-						return
+					if okT {
+						deltaT := time.Now().UnixNano() - timestamp
+						if deltaT > int64(timeout) {
+							cpe.container.DecFluxes()
+							c2cm.mu.Lock()
+							delete(c2cm.crc2conn, crc)
+							c2cm.mu.Unlock()
+							return
+						}
 					}
 				}
 			}
-		}(1 * time.Millisecond)
-		return cpe.conn
+		}(c2cm.fluxMaxAge)
+		//}(1 * time.Millisecond)
+		return cpe.conn, sem
 	}
 }
 
@@ -102,6 +123,7 @@ type ConnPoolElem struct {
 	crc2ConnMap *Crc2ConnMap
 	ports       map[uint16]bool
 	container   *Container
+	stopChan    chan struct{}
 }
 
 func NewConnPool(crc2ConnMap *Crc2ConnMap) *ConnPool {
@@ -110,8 +132,40 @@ func NewConnPool(crc2ConnMap *Crc2ConnMap) *ConnPool {
 	return res
 }
 
+func (cp *ConnPool) Size() int {
+	i := 0
+	log.Println("Size rlock")
+	cp.mu.RLock()
+	currElem := cp.headElem
+	for currElem != cp.tailElem {
+		if i > 5 {
+			break
+		}
+		currElem = currElem.next
+		i++
+	}
+	cp.mu.RUnlock()
+	log.Println("Size runlock")
+	return i
+}
+
+func (cp *ConnPool) SizeNoLock() int {
+	if cp.headElem == nil {
+		return 0
+	}
+
+	i := 1
+	currElem := cp.headElem
+	for currElem != cp.tailElem {
+		currElem = currElem.next
+		i++
+	}
+	return i
+}
+
 func (cp *ConnPool) Add(conn *net.UDPConn, container *Container) *ConnPoolElem {
-	elem := &ConnPoolElem{conn, nil, nil, &cp.mu, cp, cp.crc2ConnMap, make(map[uint16]bool), container}
+	elem := &ConnPoolElem{conn, nil, nil, &cp.mu, cp, cp.crc2ConnMap, make(map[uint16]bool), container, make(chan struct{})}
+	//time.Now().UnixNano()}
 	cp.mu.Lock()
 	if cp.headElem == nil {
 		// also tail is nil
@@ -130,20 +184,76 @@ func (cp *ConnPool) Add(conn *net.UDPConn, container *Container) *ConnPoolElem {
 		cp.headElem.prev = elem
 		cp.tailElem = elem
 	}
+
+	var headId, tailId, currId, size int = -1, -1, -1, -1
+	if cp.headElem != nil {
+		headId = int(cp.headElem.container.Id)
+	}
+
+	if cp.tailElem != nil {
+		tailId = int(cp.tailElem.container.Id)
+	}
+
+	if cp.currElem != nil {
+		currId = int(cp.currElem.container.Id)
+	}
+
+	size = cp.SizeNoLock()
 	cp.mu.Unlock()
+	log.Printf("DEBUG Add to CP - cp.head %d - cp.tail %d - cp.curr %d - size %d", headId, tailId, currId, size)
 	return elem
 }
 
 func (cp *ConnPool) Next() *ConnPoolElem {
-	if cp.headElem == nil {
-		return nil
-	} else {
-		cp.mu.Lock()
-		res := cp.currElem
-		cp.currElem = res.next
-		cp.mu.Unlock()
-		return res
+	cp.mu.Lock()
+
+	// var res *ConnPoolElem
+	// for {
+	// 	res = cp.currElem
+	// 	cp.currElem = res.next
+	// 	if (cp.currElem.addTime-time.Now().UnixNano())/int64(time.Second) <= (MAX_ACTION_RUNTIME_IN_SECONDS - 10) {
+	// 		break
+	// 	}
+	// }
+
+	res := cp.currElem
+
+	if res == nil {
+		var head int = -1
+		if cp.headElem != nil && cp.headElem.container != nil {
+			head = int(cp.headElem.container.Id)
+		}
+
+		var tail int = -1
+		if cp.tailElem != nil && cp.tailElem.container != nil {
+			head = int(cp.tailElem.container.Id)
+		}
+
+		var size int = cp.SizeNoLock()
+
+		log.Printf("DEBUG res == nil - cp.head.cntId %d - cp.tail.cntId %d - size %d", head, tail, size)
 	}
+
+	cp.currElem = res.next
+
+	// var headId, tailId, currId, size int = -1, -1, -1, -1
+	// if cp.headElem != nil {
+	// 	headId = int(cp.headElem.container.Id)
+	// }
+
+	// if cp.tailElem != nil {
+	// 	tailId = int(cp.tailElem.container.Id)
+	// }
+
+	// if cp.currElem != nil {
+	// 	currId = int(cp.currElem.container.Id)
+	// }
+
+	// size = cp.SizeNoLock()
+	cp.mu.Unlock()
+
+	//log.Printf("DEBUG Next from CP - cp.head %d - cp.tail %d - cp.curr %d - size %d", headId, tailId, currId, size)
+	return res
 }
 
 func (ce *ConnPoolElem) AddCrc(crc uint16) {
@@ -152,31 +262,129 @@ func (ce *ConnPoolElem) AddCrc(crc uint16) {
 	ce.mu.Unlock()
 }
 
+func (ce *ConnPoolElem) GetFluxes() int8 {
+	ce.mu.RLock()
+	res := ce.container.Fluxes
+	ce.mu.RUnlock()
+	return res
+}
+
+func (ce *ConnPoolElem) GetContainer() *Container {
+	ce.mu.RLock()
+	res := ce.container
+	ce.mu.RUnlock()
+	return res
+}
+
 func (ce *ConnPoolElem) Delete() {
 	// current node no more available for new fluxes
-	ce.mu.Lock()
+	// ce.connPool.mu.Lock()
+	// if ce.next == ce {
+
+	// 	// ce.connPool.currElem = nil
+	// 	log.Println("DEBUG 1 currElem.cntId %d - connPool size %d - head.cntId %d - tail.cntId %d", ce.connPool.SizeNoLock(),
+	// 		ce.connPool.currElem.container.Id, ce.connPool.headElem.container.Id, ce.connPool.tailElem.container.Id)
+
+	// 	ce.connPool.headElem = nil
+	// 	ce.connPool.tailElem = nil
+	// } else {
+	// 	if ce.prev == nil || ce.next == nil {
+	// 		ce.conn = nil
+	// 		ce.container = nil
+	// 		ce.crc2ConnMap = nil
+	// 		ce.connPool.mu.Unlock()
+	// 		return
+	// 	} else {
+	// 		ce.prev.next, ce.next.prev = ce.next, ce.prev
+
+	// 		if ce.connPool.currElem == ce {
+	// 			ce.connPool.currElem = ce.next
+	// 		}
+
+	// 		if ce.connPool.headElem == ce {
+	// 			ce.connPool.headElem = ce.next
+	// 		}
+
+	// 		if ce.connPool.tailElem == ce {
+	// 			ce.connPool.tailElem = ce.next
+	// 		}
+	// 	}
+	// }
+
+	// var headId, tailId, currId, size int = -1, -1, -1, -1
+	// if ce.connPool.headElem != nil {
+	// 	headId = int(ce.connPool.headElem.container.Id)
+	// }
+
+	// if ce.connPool.tailElem != nil {
+	// 	tailId = int(ce.connPool.tailElem.container.Id)
+	// }
+
+	// if ce.connPool.currElem != nil {
+	// 	currId = int(ce.connPool.currElem.container.Id)
+	// }
+
+	// size = ce.connPool.SizeNoLock()
+	// ce.connPool.mu.Unlock()
+
+	ce.connPool.mu.Lock()
 	if ce.next == ce {
+
+		// ce.connPool.currElem = nil
+		log.Println("DEBUG 1 currElem.cntId %d - connPool size %d - head.cntId %d - tail.cntId %d", ce.connPool.SizeNoLock(),
+			ce.connPool.currElem.container.Id, ce.connPool.headElem.container.Id, ce.connPool.tailElem.container.Id)
+
 		ce.connPool.headElem = nil
 		ce.connPool.tailElem = nil
-		ce.connPool.currElem = nil
 	} else {
-		ce.prev.next, ce.next.prev = ce.next, ce.prev
+		if ce.prev == nil || ce.next == nil {
+			ce.conn = nil
+			ce.container = nil
+			ce.crc2ConnMap = nil
+			ce.connPool.mu.Unlock()
+			return
+		} else {
+			ce.prev.next, ce.next.prev = ce.next, ce.prev
 
-		if ce.connPool.currElem == ce {
-			ce.connPool.currElem = ce.next
-		}
+			if ce.connPool.currElem == ce {
+				ce.connPool.currElem = ce.next
+			}
 
-		if ce.connPool.headElem == ce {
-			ce.connPool.headElem = ce.next
-		}
+			if ce.connPool.headElem == ce {
+				ce.connPool.headElem = ce.next
+			}
 
-		if ce.connPool.tailElem == ce {
-			ce.connPool.tailElem = ce.next
+			if ce.connPool.tailElem == ce {
+				ce.connPool.tailElem = ce.prev
+			}
 		}
 	}
 
+	var headId, tailId, currId, size int = -1, -1, -1, -1
+	if ce.connPool.headElem != nil {
+		headId = int(ce.connPool.headElem.container.Id)
+	}
+
+	if ce.connPool.tailElem != nil {
+		tailId = int(ce.connPool.tailElem.container.Id)
+	}
+
+	if ce.connPool.currElem != nil {
+		currId = int(ce.connPool.currElem.container.Id)
+	}
+
+	size = ce.connPool.SizeNoLock()
+	ce.connPool.mu.Unlock()
+
+	log.Printf("DEBUG Delete from CP - cp.head %d - cp.tail %d - cp.curr %d - size %d", headId, tailId, currId, size)
+
+	ce.mu.Lock()
+	close(ce.stopChan)
 	// used below as guard to avoid decrement after that the container has been deleted
 	ce.next = nil
+	ce.prev = nil
+	//ce.container = nil
+
 	ce.mu.Unlock()
 
 	// safetly close connection after function return
@@ -184,6 +392,8 @@ func (ce *ConnPoolElem) Delete() {
 
 	if ce.ports == nil || len(ce.ports) == 0 {
 		// in case no connections are in place, close the opened one
+		sendTerminationSignal(ce.conn, ce.container.Addr.String())
+		ce.container = nil
 		return
 	}
 
@@ -193,32 +403,37 @@ func (ce *ConnPoolElem) Delete() {
 
 	// reallocate other connections in Crc2ConnMap
 	ce.crc2ConnMap.mu.Lock()
+	log.Printf("DEBUG Delete substitute cnt %d with cnt %d\n", ce.container.Id, rCe.container.Id)
+
 	for port, _ := range ce.ports {
 		ce.crc2ConnMap.crc2conn[port] = rCe.conn
 
 		// increment number of fluxes for replacement container
-		ce.container.IncFluxes()
+		rCe.container.IncFluxes()
 
-		// schedule number of fluxes revision for replacement container
-		go func(timeout time.Duration) {
+		go func(timeout time.Duration, port uint16) {
 			t := time.NewTicker(timeout)
-			// loop til the container is available
-			for ce.next != nil {
-				<-t.C
-				ce.crc2ConnMap.mu.RLock()
-				if timestamp, okT := ce.crc2ConnMap.crcFluxUsageMap[port]; okT {
+			for {
+				select {
+				case <-rCe.stopChan:
+					return
+				case <-t.C:
+					ce.crc2ConnMap.mu.RLock()
+					timestamp, okT := ce.crc2ConnMap.crcFluxUsageMap[port]
 					ce.crc2ConnMap.mu.RUnlock()
-					deltaT := time.Now().UnixNano() - timestamp
-					if deltaT > int64(timeout) {
-						rCe.container.DecFluxes()
-						ce.crc2ConnMap.mu.Lock()
-						delete(ce.crc2ConnMap.crc2conn, port)
-						ce.crc2ConnMap.mu.Unlock()
-						return
+					if okT {
+						deltaT := time.Now().UnixNano() - timestamp
+						if deltaT > int64(timeout) {
+							rCe.container.DecFluxes()
+							ce.crc2ConnMap.mu.Lock()
+							delete(ce.crc2ConnMap.crc2conn, port)
+							ce.crc2ConnMap.mu.Unlock()
+							return
+						}
 					}
 				}
 			}
-		}(1 * time.Millisecond)
+		}(1*time.Millisecond, port)
 
 	}
 	ce.crc2ConnMap.mu.Unlock()
@@ -228,6 +443,38 @@ func (ce *ConnPoolElem) Delete() {
 		rCe.ports[key] = true
 	}
 	rCe.mu.Unlock()
+
+	sendTerminationSignal(ce.conn, ce.container.Addr.String())
+}
+
+func (ce *ConnPoolElem) IsAlive() bool {
+	ce.mu.RLock()
+	res := (ce.prev != nil)
+	ce.mu.RUnlock()
+	return res
+}
+
+func (ce *ConnPoolElem) IsRepl() bool {
+	ce.mu.RLock()
+	res := ce.container.Repl
+	ce.mu.RUnlock()
+	return res
+}
+
+func (ce *ConnPoolElem) GetStopChan() chan struct{} {
+	ce.mu.RLock()
+	res := ce.stopChan
+	ce.mu.RUnlock()
+	return res
+}
+
+func sendTerminationSignal(conn *net.UDPConn, ip string) {
+	_, err := conn.Write([]byte("terminate"))
+	if err != nil {
+		RLogger.Printf("Error sending termination message to %s\n", ip)
+	}
+
+	RLogger.Printf("Termination message sent to %s\n", ip)
 }
 
 type ruleFunc *func([]byte) bool
@@ -268,7 +515,7 @@ func PktCrc16(buff []byte) (uint16, error) {
 	return crc16.ChecksumIBM(bSlice), nil
 }
 
-func (rm RuleMap) GetChan(pkt []byte) *net.UDPConn {
+func (rm RuleMap) GetChan(pkt []byte) (*net.UDPConn, *semaphore.Weighted) {
 	for rule, crc2Conn := range rm {
 		if (func([]byte) bool)(*rule)(pkt) {
 			code, _ := PktCrc16(pkt)
@@ -276,5 +523,5 @@ func (rm RuleMap) GetChan(pkt []byte) *net.UDPConn {
 		}
 	}
 
-	return nil
+	return nil, nil
 }

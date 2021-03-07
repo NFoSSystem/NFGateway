@@ -21,7 +21,7 @@ var Counter uint32 = 0
 // - action name
 // - param
 // - value
-func CreateFunction(hostname, auth, action, redisIp string, redisPort int) error {
+func CreateFunction(hostname, auth, action, redisIp string, redisPort int, cntId uint16, repl string) error {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -42,13 +42,13 @@ func CreateFunction(hostname, auth, action, redisIp string, redisPort int) error
 	// }
 
 	var paramStr string = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"redisIp\":\"" + redisIp + "\"," + "\"redisPort\":" +
-		strconv.Itoa(redisPort) + "}"
+		strconv.Itoa(redisPort) + ", \"cntId\":\"" + strconv.Itoa(int(cntId)) + "\", \"repl\":\"" + repl + "\"}"
 	if action == "nat" {
 		leasedPorts := utils.CPMap.AssignPorts(&addrPtr)
 		leasedPortsString := nflib.GetStringFromPortSlice(leasedPorts)
 		paramStr = "{\"address\":\"172.17.0.1\", \"port\":\"9082\", \"leasedPorts\":\"" +
 			leasedPortsString + "\", \"redisIp\":\"" + redisIp + "\"," + "\"redisPort\":" +
-			strconv.Itoa(redisPort) + "}"
+			strconv.Itoa(redisPort) + ", \"cntId\":\"" + strconv.Itoa(int(cntId)) + "\", \"repl\":\"" + repl + "\"}"
 	}
 
 	reqBody := strings.NewReader(paramStr)

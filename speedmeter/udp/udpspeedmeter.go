@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -91,6 +92,11 @@ func main() {
 			log.Fatalln("Error converting input parameter to integer!")
 		}
 
+		var sleep time.Duration
+		if len(args) > 4 {
+			sleep = ParseSleepInputParam(args[4])
+		}
+
 		conn, err := net.DialUDP("udp", nil, &net.UDPAddr{addr, port, ""})
 		if err != nil {
 			log.Fatalf("Error opening UDP socket to %s:%d: %s\n", addr, port, err)
@@ -106,9 +112,11 @@ func main() {
 			timeOut = true
 		})
 		for !timeOut {
-			time.Sleep(250 * time.Nanosecond)
+			//time.Sleep(10 * time.Nanosecond)
+			//time.Sleep(250 * time.Nanosecond)
 			//time.Sleep(400 * time.Nanosecond)
-			//time.Sleep(500 * time.Nanosecond)
+			//time.Sleep(400 * time.Nanosecond)
+			time.Sleep(sleep)
 			size, err := conn.Write(buff)
 			if err != nil {
 				log.Fatalf("Error writing buff to UDP socket headed to %s:%d: %s\n", addr, port, err)
@@ -158,4 +166,31 @@ func isDeadlineExceeded(err error) bool {
 		return false
 	}
 	return true
+}
+
+func ParseSleepInputParam(sleepParam string) time.Duration {
+	rgx := regexp.MustCompile("(\\d+)([num]s)")
+	matchRes := rgx.FindStringSubmatch(sleepParam)
+	if matchRes == nil || len(matchRes) != 3 {
+		return 0
+	} else {
+		interval, err := strconv.Atoi(matchRes[1])
+		if err != nil {
+			log.Fatalf("Error parsing optional sleep param %s: %s", sleepParam, err)
+		}
+		return time.Duration(interval) * getDurationFromParam(matchRes[2])
+	}
+}
+
+func getDurationFromParam(unit string) time.Duration {
+	switch unit {
+	case "ns":
+		return time.Nanosecond
+	case "us":
+		return time.Microsecond
+	case "ms":
+		return time.Millisecond
+	default:
+		return time.Duration(0)
+	}
 }

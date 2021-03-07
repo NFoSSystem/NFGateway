@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/google/netstack/tcpip/header"
+
 	"github.com/howeyc/crc16"
 	"github.com/mdlayher/ethernet"
 	"github.com/mdlayher/raw"
@@ -101,12 +103,13 @@ func PktCrc16(buff []byte) (uint16, error) {
 
 func sendToIpv2(crc2ConnMap map[uint16]*net.UDPConn, mu sync.RWMutex, pkt []byte, addr *net.IP, port int) {
 	crc, err := PktCrc16(pkt)
-	// ipPkt := header.IPv4(pkt)
-	// udpPkt := header.UDP(ipPkt.Payload())
 	if err != nil {
 		log.Printf("Error calculation the crc of the incoming packet: %s\n", err)
 		return
 	}
+
+	//ipPkt := header.IPv4(pkt)
+	//udpPkt := header.UDP(ipPkt.Payload())
 	mu.RLock()
 	conn, ok := crc2ConnMap[crc]
 	mu.RUnlock()
@@ -149,11 +152,8 @@ func sendToIpv3(conn *net.UDPConn, pkt []byte) {
 
 func main() {
 	len := len(os.Args)
-	if len < 5 {
-		log.Fatalf("Error provided parameter are not enough, expected 3, provided %d\n", len)
-	}
 
-	version, _ := strconv.Atoi(os.Args[4])
+	version, _ := strconv.Atoi(os.Args[len-1])
 	switch version {
 	case 1:
 		main1()
@@ -161,6 +161,8 @@ func main() {
 		main2()
 	case 3:
 		main3()
+	case 4:
+		main4()
 	default:
 		log.Fatalf("No version selected as input: %s\n", version)
 	}
@@ -264,12 +266,12 @@ func main2() {
 			log.Fatalf("Error unmarshalling received message: %s\n", err)
 		}
 
-		ipBuff := []byte(eFrame.Payload)
+		//ipBuff := []byte(eFrame.Payload)
 
-		switch ipBuff[9] {
+		switch eFrame.Payload[9] {
 		case 17:
 			// UDP
-			sendToIpv2(crc2ConnMap, mu, ipBuff, &ip, port)
+			go sendToIpv2(crc2ConnMap, mu, eFrame.Payload, &ip, port)
 		}
 	}
 }
@@ -326,5 +328,78 @@ func main3() {
 			// UDP
 			sendToIpv3(conn, ipBuff)
 		}
+	}
+}
+
+func main4() {
+	args := os.Args[1:]
+	len := len(args)
+	if len < 3 {
+		log.Fatalf("Error provided parameter are not enough, expected 3, provided %d\n", len)
+	}
+
+	ip := net.ParseIP(args[0])
+	port, err := strconv.Atoi(args[1])
+	if err != nil {
+		log.Fatalf("Error parsing port from argument %s: %s\n", args[2], err)
+	}
+
+	inConn, err := net.ListenIP("ip4:udp", &net.IPAddr{net.IPv4(0, 0, 0, 0), ""})
+	if err != nil {
+		log.Fatalf("Error opening ip connection: %s\n", err)
+	}
+	defer inConn.Close()
+
+	buff := make([]byte, 65536)
+
+	outConn, err := net.DialUDP("udp", nil, &net.UDPAddr{ip, port, ""})
+	if err != nil {
+		log.Fatalf("Error opening UDP connection: %s\n", err)
+	}
+
+	log.Println("Before for loop")
+
+	var mu sync.RWMutex
+	portConnMap := make(map[int]bool)
+	stopChan := make(chan struct{})
+
+	go OpenUDPConnection(5832, mu, portConnMap, stopChan)
+
+	for {
+		size, err := inConn.Read(buff)
+		if err != nil {
+			log.Printf("Error reading from ip socket: %s\n", err)
+			continue
+		}
+
+		ipPkt := header.IPv4(buff[:size])
+		ipBuff := []byte(buff[:size])
+
+		switch ipPkt.Protocol() {
+		case 17:
+			// UDP
+			sendToIpv3(outConn, ipBuff)
+		default:
+			continue
+		}
+	}
+}
+
+func OpenUDPConnection(port int, mu sync.RWMutex, portConnMap map[int]bool, stopChan chan struct{}) {
+	mu.RLock()
+	_, ok := portConnMap[port]
+	mu.RUnlock()
+	if ok {
+		return
+	} else {
+		mu.Lock()
+		portConnMap[port] = true
+		mu.Unlock()
+
+		_, err := net.ListenUDP("udp", &net.UDPAddr{net.IPv4(0, 0, 0, 0), port, ""})
+		if err != nil {
+			log.Fatalf("Error opening connection: %s\n", err)
+		}
+		<-stopChan
 	}
 }

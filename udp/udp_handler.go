@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"context"
 	"faasrouter/cnt"
 	"faasrouter/utils"
 	"log"
@@ -80,12 +81,15 @@ func HandleIncomingRequestsFromIPv4(pktBuff []byte, ruleMap *utils.RuleMap, logg
 	// 	return
 	// }
 
-	outChan := ruleMap.GetChan(pktBuff)
+	outChan, lock := ruleMap.GetChan(pktBuff)
 	if outChan == nil {
 		utils.RLogger.Println("Error no out chan available for incoming packet, packet dropped")
 		return
 	}
 
+	ctx := context.TODO()
+	lock.Acquire(ctx, 1)
 	cnt.SendToContainer3(pktBuff, outChan)
+	lock.Release(1)
 	//utils.RLogger.Printf("Packet received from %s:%d headed to %s:%d sent to container\n", srcIP, src, trgIP, trg)
 }

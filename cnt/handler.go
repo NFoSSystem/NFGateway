@@ -3,7 +3,6 @@ package cnt
 import (
 	"bytes"
 	"encoding/binary"
-	op "faasrouter/openwhisk"
 	"faasrouter/utils"
 	"fmt"
 	"log"
@@ -75,32 +74,49 @@ func getBytesFromMsg(src msg) []byte {
 }
 
 //func addEntryToChan(outChan chan<- *container, cl *ContainerList, buff []byte, size int) {
-func addEntryToChan(cil map[string]*ContainerInfo, buff []byte, size int) {
+func addEntryToChan(cil map[string]*ContainerInfo, a2c *Action2Cep, buff []byte, size int) {
 	// get container address and port and add it to the channel
 	//bSlice := b.Buff()
 	tMsg := nflib.GetMsgFromBytes(buff[:size])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
-	cnt := &utils.Container{Addr: &ipAddr, Port: tMsg.Port, Fluxes: 0}
+	cnt := &utils.Container{Addr: &ipAddr, Port: tMsg.Port, Fluxes: 0, Id: tMsg.CntId, Repl: tMsg.Repl}
 	actionName := trimActionName(fmt.Sprintf("%s", tMsg.Name))
+	connPoolElem := cil[actionName].cntPool.Add(UDPConnFactory(&ipAddr, int(tMsg.Port)), cnt)
+	cil[actionName].cntLst.AddContainer(cnt)
 
 	utils.RLogger.Printf("Accepting incoming PING request from address %s port %d action %s\n", ipAddr, tMsg.Port, actionName)
 
-	cil[actionName].cntLst.AddContainer(cnt)
-	connPoolElem := cil[actionName].cntPool.Add(UDPConnFactory(&ipAddr, int(tMsg.Port)), cnt)
+	cep := a2c.Get(actionName)
+	cep.AddConnElem(tMsg.CntId, connPoolElem, cil[actionName].cntLst)
 
-	stopChan := make(chan struct{})
+	// go func() {
+	// 	time.AfterFunc((MAX_ACTION_RUNTIME_IN_SECONDS-5)*time.Second, func() {
+	// 		utils.RLogger.Printf("Before deleting function %s at address %s\n", actionName, ipAddr.String())
+	// 		cil[actionName].cntLst.RemoveContainer(cnt)
+	// 		connPoolElem.Delete()
+	// 		connPoolElem = nil
+	// 		log.Printf("DEBUG After delete in async goroutine")
+	// 	})
+	// }()
 
-	go func() {
-		time.AfterFunc((MAX_ACTION_RUNTIME_IN_SECONDS-5)*time.Second, func() {
+	go func(stopChan chan struct{}) {
+		timer := time.NewTimer((MAX_ACTION_RUNTIME_IN_SECONDS - 5) * time.Second)
+		cntId := connPoolElem.GetContainer().Id
+
+		select {
+		case <-timer.C:
 			utils.RLogger.Printf("Before deleting function %s at address %s\n", actionName, ipAddr.String())
 			cil[actionName].cntLst.RemoveContainer(cnt)
 			connPoolElem.Delete()
-			close(stopChan)
-		})
-	}()
+			connPoolElem = nil
+			log.Printf("DEBUG After delete in async goroutine")
+		case <-stopChan:
+			log.Printf("Received message to terminate async delete function for container %d\n", cntId)
+			return
+		}
 
-	<-stopChan
+	}(connPoolElem.GetStopChan())
 	// release the acquired buffer as soon as it is not useful anymore
 	//b.Release()
 }
@@ -123,7 +139,27 @@ func trimActionName(actionName string) string {
 	return actionName
 }
 
-func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
+// func AcceptRegisterRequests(cil map[string]*ContainerInfo, cep *ConnElemProvisioner, addr *net.TCPAddr) {
+// 	lstn, err := net.ListenTCP("tcp", addr)
+// 	if err != nil {
+// 		utils.RLogger.Printf("Error opening TCP connection on interface %s and port %d: %s\n", addr.IP, addr.Port, err)
+// 		return
+// 	}
+// 	defer lstn.Close()
+
+// 	for {
+// 		conn, err := lstn.AcceptTCP()
+// 		if err != nil {
+// 			utils.RLogger.Printf("Error accepting TCP connection from %s:%d: %s\n", addr.IP, addr.Port, err)
+// 			continue
+// 		}
+// 		buff := make([]byte, 65535)
+// 		size, _ := conn.Read(buff)
+// 		go addEntryToChan(cil, cep, buff, size)
+// 	}
+// }
+
+func AcceptRegisterRequests(cil map[string]*ContainerInfo, a2c *Action2Cep, addr *net.TCPAddr) {
 	lstn, err := net.ListenTCP("tcp", addr)
 	if err != nil {
 		utils.RLogger.Printf("Error opening TCP connection on interface %s and port %d: %s\n", addr.IP, addr.Port, err)
@@ -139,7 +175,7 @@ func AcceptRegisterRequests(cil map[string]*ContainerInfo, addr *net.TCPAddr) {
 		}
 		buff := make([]byte, 65535)
 		size, _ := conn.Read(buff)
-		go addEntryToChan(cil, buff, size)
+		go addEntryToChan(cil, a2c, buff, size)
 	}
 }
 
@@ -217,7 +253,7 @@ func sendToContainerHelper(pkt []byte, crcConnMap map[uint16]*net.UDPConn, mutex
 func SendToContainer3(pkt []byte, conn *net.UDPConn) {
 	_, err := conn.Write(pkt)
 	if err != nil {
-		utils.RLogger.Fatalf("Error sending message to UDP socket: %s\n", err)
+		utils.RLogger.Printf("Error sending message to UDP socket: %s - conn: %v\n", err, conn)
 	}
 }
 
@@ -230,23 +266,23 @@ func sendToContainer(cm *ContainerMap, incPkt <-chan []byte, cntChan <-chan *uti
 	}
 }
 
-func instantiateFunctions(hostname, auth, actionName, redisIp string, redisPort int, instances int) {
-	timeout := time.NewTicker(ACTION_TRIGGER_TIMEOUT_IN_SECONDS * time.Second)
+// func instantiateFunctions(hostname, auth, actionName, redisIp string, redisPort int, instances int) {
+// 	timeout := time.NewTicker(ACTION_TRIGGER_TIMEOUT_IN_SECONDS * time.Second)
 
-	for {
-		for i := 0; i < instances; i++ {
-			err := op.CreateFunction(hostname, auth, actionName, redisIp, redisPort)
-			if err != nil {
-				utils.RLogger.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
-					actionName)
-				utils.RLogger.Printf("Error obtained: %s", err)
-			} else {
-				utils.RLogger.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
-			}
-		}
-		<-timeout.C
-	}
-}
+// 	for {
+// 		for i := 0; i < instances; i++ {
+// 			err := op.CreateFunction(hostname, auth, actionName, redisIp, redisPort)
+// 			if err != nil {
+// 				utils.RLogger.Printf("Error creating function on OpenWhisk at hostname %s for action %s", hostname,
+// 					actionName)
+// 				utils.RLogger.Printf("Error obtained: %s", err)
+// 			} else {
+// 				utils.RLogger.Printf("Function %d created on OpenWhisk at %s with action %s", i+1, hostname, actionName)
+// 			}
+// 		}
+// 		<-timeout.C
+// 	}
+// }
 
 // func handleContainerPool(cl *ContainerList, out chan<- *container) {
 // 	for {
@@ -269,7 +305,7 @@ func handleContainerPool(inChan <-chan *utils.Container, outChan chan<- *utils.C
 	}
 }
 
-func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, actionName, redisIp string, redisPort int, logger *log.Logger) {
+func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, actionName, redisIp string, redisPort int, logger *log.Logger, cep *ConnElemProvisioner) {
 	p := new(Provisioner)
 	p.Hostname = hostname
 	p.Auth = auth
@@ -285,7 +321,7 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 	p.RedisIp = redisIp
 	p.RedisPort = redisPort
 
-	go p.InstantiateFunctions()
+	go p.InstantiateFunctions(cep)
 
 	//go instantiateFunctions(hostname, auth, actionName, 1)
 
@@ -294,46 +330,51 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 
 func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger, redisIp string, redisPort int) *utils.RuleMap {
 	rl := utils.NewRuleMap()
-	natCl := NewContainerList()
-	//dhcpCl := NewContainerList()
+	// natCl := NewContainerList()
+	dhcpCl := NewContainerList()
 
-	natCrc2ConnMap, natConnPool := utils.NewCrc2ConnMap()
-
-	//dhcpOutChan := make(chan *container, 50)
+	// natCrc2ConnMap, natConnPool := utils.NewCrc2ConnMap()
+	dhcpCrc2ConnMap, dhcpConnPool := utils.NewCrc2ConnMap(time.Duration(100 * time.Millisecond))
 
 	cil := make(map[string]*ContainerInfo)
-	cil["nat"] = &ContainerInfo{natConnPool, natCl}
-	//cil["dhcp"] = &ContainerInfo{dhcpOutChan, dhcpCl}
 
-	go AcceptRegisterRequests(cil, &net.TCPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
+	// cil["nat"] = &ContainerInfo{natConnPool, natCl}
+	// natCep := NewConnElemProvisioner()
 
-	// dhcpChan := make(chan []byte, 200)
+	cil["dhcp"] = &ContainerInfo{dhcpConnPool, dhcpCl}
+	dhcpCep := NewConnElemProvisioner()
 
-	// rl.Add(func(pkt []byte) bool {
-	// 	_, trg, err := utils.GetPortsFromPkt(pkt)
-	// 	if err != nil {
-	// 		utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
-	// 		return false
-	// 	}
+	a2c := NewAction2Cep()
+	//a2c.Set("nat", natCep)
+	a2c.Set("dhcp", dhcpCep)
 
-	// 	// check if the incoming message is a DNS message
-	// 	return trg == 67
-	// }, dhcpChan)
-
-	// go ActionHandler(dhcpChan, stopChan, dhcpOutChan, dhcpCl, hostname, auth, "dhcp", logger)
+	go AcceptRegisterRequests(cil, a2c, &net.TCPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
 
 	rl.Add(func(pkt []byte) bool {
-		src, _, err := utils.GetPortsFromPkt(pkt)
+		_, trg, err := utils.GetPortsFromPkt(pkt)
 		if err != nil {
 			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
 			return false
 		}
 
-		// filter out incoming messages having 53 as source port
-		return src != 53
-	}, natCrc2ConnMap)
+		// check if the incoming message is a DHCP message
+		return trg == 67
+	}, dhcpCrc2ConnMap)
 
-	go ActionHandler(stopChan, natCl, hostname, auth, "nat", redisIp, redisPort, logger)
+	go ActionHandler(stopChan, dhcpCl, hostname, auth, "dhcp", redisIp, redisPort, logger, dhcpCep)
+
+	// rl.Add(func(pkt []byte) bool {
+	// 	src, _, err := utils.GetPortsFromPkt(pkt)
+	// 	if err != nil {
+	// 		utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
+	// 		return false
+	// 	}
+
+	// 	// filter out incoming messages having 53 as source port
+	// 	return src != 53
+	// }, natCrc2ConnMap)
+
+	// go ActionHandler(stopChan, natCl, hostname, auth, "nat", redisIp, redisPort, logger, natCep)
 
 	return rl
 }
