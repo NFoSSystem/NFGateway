@@ -16,12 +16,13 @@ const (
 )
 
 type Container struct {
-	Addr   *net.IP
-	Port   uint16
-	Fluxes int8
-	Mu     sync.RWMutex
-	Id     uint16
-	Repl   bool
+	Addr      *net.IP
+	Port      uint16
+	Fluxes    int8
+	Mu        sync.RWMutex
+	Id        uint16
+	Repl      bool
+	MaxFluxes int8
 }
 
 func (c *Container) IncFluxes() {
@@ -40,12 +41,24 @@ func (c *Container) DecFluxes() {
 	c.Mu.Unlock()
 }
 
+func (c *Container) GetFluxes() int8 {
+	c.Mu.RLock()
+	res := c.Fluxes
+	c.Mu.RUnlock()
+	return res
+}
+
+func (c *Container) GetMaxFluxes() int8 {
+	return c.MaxFluxes
+}
+
 type Crc2ConnMap struct {
 	mu              sync.RWMutex
 	crc2conn        map[uint16]*net.UDPConn
 	crc2lock        map[uint16]*semaphore.Weighted
 	connPool        *ConnPool
 	crcFluxUsageMap map[uint16]int64
+	crcContainer    map[uint16]*Container
 	fluxMaxAge      time.Duration
 }
 
@@ -55,6 +68,7 @@ func NewCrc2ConnMap(fluxMaxAge time.Duration) (*Crc2ConnMap, *ConnPool) {
 	res.crc2lock = make(map[uint16]*semaphore.Weighted)
 	res.connPool = NewConnPool(res)
 	res.crcFluxUsageMap = make(map[uint16]int64)
+	res.crcContainer = make(map[uint16]*Container)
 	res.fluxMaxAge = fluxMaxAge
 	return res, res.connPool
 }
@@ -62,20 +76,38 @@ func NewCrc2ConnMap(fluxMaxAge time.Duration) (*Crc2ConnMap, *ConnPool) {
 func (c2cm *Crc2ConnMap) Get(crc uint16) (*net.UDPConn, *semaphore.Weighted) {
 	c2cm.mu.RLock()
 	val, ok := c2cm.crc2conn[crc]
+	container, okCnt := c2cm.crcContainer[crc]
 	lock, _ := c2cm.crc2lock[crc]
 	c2cm.mu.RUnlock()
 	c2cm.mu.Lock()
 	c2cm.crcFluxUsageMap[crc] = time.Now().UnixNano()
 	c2cm.mu.Unlock()
-	if ok {
+
+	// c2cm.mu.Lock()
+	// val, ok := c2cm.crc2conn[crc]
+	// container, okCnt := c2cm.crcContainer[crc]
+	// lock, _ := c2cm.crc2lock[crc]
+	// c2cm.crcFluxUsageMap[crc] = time.Now().UnixNano()
+	// c2cm.mu.Unlock()
+	if ok && okCnt && container.GetFluxes() <= container.GetMaxFluxes() {
+		//log.Printf("DEBUG c2cm: %v\n", c2cm)
 		return val, lock
 	} else {
+		// log.Printf("DEBUG ok %v - okCnt %v - crc %v\n", ok, okCnt, crc)
+		// if container != nil {
+		// 	log.Printf("DEBUG fluxes %v - max fluxes %v\n", container.GetFluxes(), container.GetMaxFluxes())
+		// }
 		cpe := c2cm.connPool.Next()
 		cpe.AddCrc(crc)
 		c2cm.mu.Lock()
+		// if val, ok = c2cm.crc2conn[crc]; ok {
+		// 	c2cm.mu.Unlock()
+		// 	return val, c2cm.crc2lock[crc]
+		// }
 		c2cm.crc2conn[crc] = cpe.conn
 		sem := semaphore.NewWeighted(1000000)
 		c2cm.crc2lock[crc] = sem
+		c2cm.crcContainer[crc] = cpe.container
 		c2cm.mu.Unlock()
 		cpe.container.IncFluxes()
 		go func(timeout time.Duration) {
@@ -94,6 +126,7 @@ func (c2cm *Crc2ConnMap) Get(crc uint16) (*net.UDPConn, *semaphore.Weighted) {
 							cpe.container.DecFluxes()
 							c2cm.mu.Lock()
 							delete(c2cm.crc2conn, crc)
+							delete(c2cm.crcContainer, crc)
 							c2cm.mu.Unlock()
 							return
 						}
@@ -185,22 +218,7 @@ func (cp *ConnPool) Add(conn *net.UDPConn, container *Container) *ConnPoolElem {
 		cp.tailElem = elem
 	}
 
-	var headId, tailId, currId, size int = -1, -1, -1, -1
-	if cp.headElem != nil {
-		headId = int(cp.headElem.container.Id)
-	}
-
-	if cp.tailElem != nil {
-		tailId = int(cp.tailElem.container.Id)
-	}
-
-	if cp.currElem != nil {
-		currId = int(cp.currElem.container.Id)
-	}
-
-	size = cp.SizeNoLock()
 	cp.mu.Unlock()
-	log.Printf("DEBUG Add to CP - cp.head %d - cp.tail %d - cp.curr %d - size %d", headId, tailId, currId, size)
 	return elem
 }
 
@@ -217,23 +235,6 @@ func (cp *ConnPool) Next() *ConnPoolElem {
 	// }
 
 	res := cp.currElem
-
-	if res == nil {
-		var head int = -1
-		if cp.headElem != nil && cp.headElem.container != nil {
-			head = int(cp.headElem.container.Id)
-		}
-
-		var tail int = -1
-		if cp.tailElem != nil && cp.tailElem.container != nil {
-			head = int(cp.tailElem.container.Id)
-		}
-
-		var size int = cp.SizeNoLock()
-
-		log.Printf("DEBUG res == nil - cp.head.cntId %d - cp.tail.cntId %d - size %d", head, tail, size)
-	}
-
 	cp.currElem = res.next
 
 	// var headId, tailId, currId, size int = -1, -1, -1, -1
@@ -331,9 +332,6 @@ func (ce *ConnPoolElem) Delete() {
 	if ce.next == ce {
 
 		// ce.connPool.currElem = nil
-		log.Println("DEBUG 1 currElem.cntId %d - connPool size %d - head.cntId %d - tail.cntId %d", ce.connPool.SizeNoLock(),
-			ce.connPool.currElem.container.Id, ce.connPool.headElem.container.Id, ce.connPool.tailElem.container.Id)
-
 		ce.connPool.headElem = nil
 		ce.connPool.tailElem = nil
 	} else {
@@ -359,24 +357,7 @@ func (ce *ConnPoolElem) Delete() {
 			}
 		}
 	}
-
-	var headId, tailId, currId, size int = -1, -1, -1, -1
-	if ce.connPool.headElem != nil {
-		headId = int(ce.connPool.headElem.container.Id)
-	}
-
-	if ce.connPool.tailElem != nil {
-		tailId = int(ce.connPool.tailElem.container.Id)
-	}
-
-	if ce.connPool.currElem != nil {
-		currId = int(ce.connPool.currElem.container.Id)
-	}
-
-	size = ce.connPool.SizeNoLock()
 	ce.connPool.mu.Unlock()
-
-	log.Printf("DEBUG Delete from CP - cp.head %d - cp.tail %d - cp.curr %d - size %d", headId, tailId, currId, size)
 
 	ce.mu.Lock()
 	close(ce.stopChan)
@@ -403,7 +384,6 @@ func (ce *ConnPoolElem) Delete() {
 
 	// reallocate other connections in Crc2ConnMap
 	ce.crc2ConnMap.mu.Lock()
-	log.Printf("DEBUG Delete substitute cnt %d with cnt %d\n", ce.container.Id, rCe.container.Id)
 
 	for port, _ := range ce.ports {
 		ce.crc2ConnMap.crc2conn[port] = rCe.conn
@@ -433,7 +413,7 @@ func (ce *ConnPoolElem) Delete() {
 					}
 				}
 			}
-		}(1*time.Millisecond, port)
+		}(500*time.Microsecond, port)
 
 	}
 	ce.crc2ConnMap.mu.Unlock()

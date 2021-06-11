@@ -7,6 +7,7 @@ require (
 	bitbucket.org/Manaphy91/faasnat v0.0.0-20201128204908-3cdfb48c3331
 	bitbucket.org/Manaphy91/nflib v0.0.0-20210207200513-5af736cb7a0a
 	github.com/go-redis/redis/v8 v8.4.0
+	github.com/google/netstack v0.0.0-20191123085552-55fcc16cd0eb
 	github.com/google/uuid v1.2.0
 	github.com/howeyc/crc16 v0.0.0-20171223171357-2b2a61e366a6
 	github.com/mdlayher/ethernet v0.0.0-20190606142754-0394541c37b7

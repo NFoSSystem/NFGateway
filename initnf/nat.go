@@ -9,7 +9,7 @@ import (
 const LOCAL_INTERFACE = "127.0.0.1"
 
 func InitNat() {
-	natSc := natdb.New(LOCAL_INTERFACE, 6379)
+	natSc := natdb.New("172.17.0.1", 6379)
 	err := natSc.CleanUpSets()
 	if err != nil {
 		utils.RLogger.Fatalf("Error during NAT NF bitsets clean up: %s", err)

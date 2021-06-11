@@ -86,15 +86,16 @@ func (cl *ContainerList) GetContainer() *utils.Container {
 }
 
 func (cl *ContainerList) GetLoadPercentage() (int, float64) {
-	sum := int8(0)
+	sum := uint32(0)
 	cl.mu.RLock()
 	for _, cnt := range cl.lst {
-		sum += min(1, cnt.Fluxes)
+		sum += uint32(min(1, cnt.Fluxes/cnt.MaxFluxes))
 	}
 
 	length := len(cl.lst)
 
 	cl.mu.RUnlock()
+
 	return length, float64(sum) / float64(length)
 }
 

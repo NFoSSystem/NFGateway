@@ -3,7 +3,7 @@ package cnt
 import (
 	op "faasrouter/openwhisk"
 	"faasrouter/utils"
-	"log"
+	//"log"
 	"math"
 	"math/rand"
 	"sync"
@@ -42,6 +42,7 @@ type Provisioner struct {
 	Min       int
 	RedisIp   string
 	RedisPort int
+	MaxFluxes int8
 }
 
 func (p *Provisioner) HandleScaling(check time.Duration, cl *ContainerList, increment chan<- int) {
@@ -389,15 +390,11 @@ func (p *Provisioner) InstantiateFunctions(cep *ConnElemProvisioner) {
 				for cntId, connElem := range cep.c2e {
 					if connElem.IsAlive() && !connElem.IsRepl() {
 						inst := cep.GetInstanceNoLock(cntId)
-						log.Printf("DEBUG Before sending %d to decChan - connElem.IsAlive() %v - connElem.IsRepl() %v\n", cntId, connElem.IsAlive(),
-							connElem.IsRepl())
 						if inst == nil || inst.decChan == nil {
 							delete(cep.c2e, cntId)
 							continue
 						}
 						inst.decChan <- cntId
-						log.Printf("DEBUG After sending %d to decChan - connElem.IsAlive() %v - connElem.IsRepl() %v\n", cntId, connElem.IsAlive(),
-							connElem.IsRepl())
 						delta += 1
 
 						if delta == 0 {

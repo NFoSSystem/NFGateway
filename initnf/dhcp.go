@@ -8,7 +8,7 @@ import (
 )
 
 func InitDhcp() {
-	client := dhcpdb.NewRedisClient(utils.LOCAL_INTERFACE, 6379)
+	client := dhcpdb.NewRedisClient(utils.REDIS_HOSTNAME, 6379)
 
 	startIp := net.ParseIP(utils.DHCP_START_IP)
 	sc := dhcpdb.NewSharedContext(client, utils.DHCP_MAX_LEASE_RANGE, &startIp,

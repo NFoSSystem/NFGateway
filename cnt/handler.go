@@ -80,8 +80,8 @@ func addEntryToChan(cil map[string]*ContainerInfo, a2c *Action2Cep, buff []byte,
 	tMsg := nflib.GetMsgFromBytes(buff[:size])
 
 	ipAddr := net.IPv4(tMsg.Addr[0], tMsg.Addr[1], tMsg.Addr[2], tMsg.Addr[3])
-	cnt := &utils.Container{Addr: &ipAddr, Port: tMsg.Port, Fluxes: 0, Id: tMsg.CntId, Repl: tMsg.Repl}
 	actionName := trimActionName(fmt.Sprintf("%s", tMsg.Name))
+	cnt := &utils.Container{Addr: &ipAddr, Port: tMsg.Port, Fluxes: 0, Id: tMsg.CntId, Repl: tMsg.Repl, MaxFluxes: cil[actionName].maxFluxes}
 	connPoolElem := cil[actionName].cntPool.Add(UDPConnFactory(&ipAddr, int(tMsg.Port)), cnt)
 	cil[actionName].cntLst.AddContainer(cnt)
 
@@ -110,7 +110,6 @@ func addEntryToChan(cil map[string]*ContainerInfo, a2c *Action2Cep, buff []byte,
 			cil[actionName].cntLst.RemoveContainer(cnt)
 			connPoolElem.Delete()
 			connPoolElem = nil
-			log.Printf("DEBUG After delete in async goroutine")
 		case <-stopChan:
 			log.Printf("Received message to terminate async delete function for container %d\n", cntId)
 			return
@@ -320,6 +319,7 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 	p.Cl = cl
 	p.RedisIp = redisIp
 	p.RedisPort = redisPort
+	p.MaxFluxes = 2
 
 	go p.InstantiateFunctions(cep)
 
@@ -330,51 +330,51 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 
 func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Logger, redisIp string, redisPort int) *utils.RuleMap {
 	rl := utils.NewRuleMap()
-	// natCl := NewContainerList()
-	dhcpCl := NewContainerList()
+	natCl := NewContainerList()
+	//dhcpCl := NewContainerList()
 
-	// natCrc2ConnMap, natConnPool := utils.NewCrc2ConnMap()
-	dhcpCrc2ConnMap, dhcpConnPool := utils.NewCrc2ConnMap(time.Duration(100 * time.Millisecond))
+	natCrc2ConnMap, natConnPool := utils.NewCrc2ConnMap(time.Duration(500 * time.Microsecond))
+	// dhcpCrc2ConnMap, dhcpConnPool := utils.NewCrc2ConnMap(time.Duration(100 * time.Millisecond))
 
 	cil := make(map[string]*ContainerInfo)
 
-	// cil["nat"] = &ContainerInfo{natConnPool, natCl}
-	// natCep := NewConnElemProvisioner()
+	cil["nat"] = &ContainerInfo{natConnPool, natCl, 10}
+	natCep := NewConnElemProvisioner()
 
-	cil["dhcp"] = &ContainerInfo{dhcpConnPool, dhcpCl}
-	dhcpCep := NewConnElemProvisioner()
+	// cil["dhcp"] = &ContainerInfo{dhcpConnPool, dhcpCl, 2}
+	// dhcpCep := NewConnElemProvisioner()
 
 	a2c := NewAction2Cep()
-	//a2c.Set("nat", natCep)
-	a2c.Set("dhcp", dhcpCep)
+	a2c.Set("nat", natCep)
+	//a2c.Set("dhcp", dhcpCep)
 
 	go AcceptRegisterRequests(cil, a2c, &net.TCPAddr{net.IPv4(0, 0, 0, 0), 9082, ""})
 
-	rl.Add(func(pkt []byte) bool {
-		_, trg, err := utils.GetPortsFromPkt(pkt)
-		if err != nil {
-			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
-			return false
-		}
-
-		// check if the incoming message is a DHCP message
-		return trg == 67
-	}, dhcpCrc2ConnMap)
-
-	go ActionHandler(stopChan, dhcpCl, hostname, auth, "dhcp", redisIp, redisPort, logger, dhcpCep)
-
 	// rl.Add(func(pkt []byte) bool {
-	// 	src, _, err := utils.GetPortsFromPkt(pkt)
+	// 	_, trg, err := utils.GetPortsFromPkt(pkt)
 	// 	if err != nil {
 	// 		utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
 	// 		return false
 	// 	}
 
-	// 	// filter out incoming messages having 53 as source port
-	// 	return src != 53
-	// }, natCrc2ConnMap)
+	// 	// check if the incoming message is a DHCP message
+	// 	return trg == 67
+	// }, dhcpCrc2ConnMap)
 
-	// go ActionHandler(stopChan, natCl, hostname, auth, "nat", redisIp, redisPort, logger, natCep)
+	// go ActionHandler(stopChan, dhcpCl, hostname, auth, "dhcp", redisIp, redisPort, logger, dhcpCep)
+
+	rl.Add(func(pkt []byte) bool {
+		src, _, err := utils.GetPortsFromPkt(pkt)
+		if err != nil {
+			utils.RLogger.Printf("Error reading ports from the incoming packet: %s\n")
+			return false
+		}
+
+		// filter out incoming messages having 53 as source port
+		return src != 53
+	}, natCrc2ConnMap)
+
+	go ActionHandler(stopChan, natCl, hostname, auth, "nat", redisIp, redisPort, logger, natCep)
 
 	return rl
 }

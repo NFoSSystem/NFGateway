@@ -8,7 +8,7 @@ const (
 	LOCAL_INTERFACE     = "127.0.0.1"
 	LOGGER_PREFIX       = "[Gateway]"
 	LOGGER_PUB_SUB_CHAN = "logChan"
-	REDIS_HOSTNAME      = LOCAL_INTERFACE
+	REDIS_HOSTNAME      = "172.17.0.1"
 	REDIS_PORT          = 6379
 
 	// DHCP Settings
