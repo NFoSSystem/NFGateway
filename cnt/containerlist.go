@@ -55,14 +55,6 @@ func min(a, b int8) int8 {
 	}
 }
 
-func minFloat(a, b float64) float64 {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
-}
-
 func (cl *ContainerList) GetContainer() *utils.Container {
 	for {
 		if cl.Empty() {
@@ -94,17 +86,17 @@ func (cl *ContainerList) GetContainer() *utils.Container {
 }
 
 func (cl *ContainerList) GetLoadPercentage() (int, float64) {
-	sum := float64(0)
+	sum := uint32(0)
 	cl.mu.RLock()
 	for _, cnt := range cl.lst {
-		sum += minFloat(1.0, float64(cnt.Fluxes)/float64(cnt.MaxFluxes))
+		sum += uint32(min(1, cnt.Fluxes/cnt.MaxFluxes))
 	}
 
 	length := len(cl.lst)
 
 	cl.mu.RUnlock()
 
-	return length, sum / float64(length)
+	return length, float64(sum) / float64(length)
 }
 
 func (cl *ContainerList) Size() int {

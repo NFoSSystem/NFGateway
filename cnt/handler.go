@@ -309,7 +309,7 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 	p.Hostname = hostname
 	p.Auth = auth
 	p.Action = actionName
-	p.Check = 3 * time.Second
+	p.Check = 5 * time.Second
 	p.Timeout = 45 * time.Second
 	p.UpThr = 0.6
 	p.DownThr = 0.3
@@ -338,7 +338,7 @@ func InitRuleMap(stopChan <-chan struct{}, hostname, auth string, logger *log.Lo
 
 	cil := make(map[string]*ContainerInfo)
 
-	cil["nat"] = &ContainerInfo{natConnPool, natCl, 2}
+	cil["nat"] = &ContainerInfo{natConnPool, natCl, 10}
 	natCep := NewConnElemProvisioner()
 
 	// cil["dhcp"] = &ContainerInfo{dhcpConnPool, dhcpCl, 2}
