@@ -309,7 +309,7 @@ func ActionHandler(stopChan <-chan struct{}, cl *ContainerList, hostname, auth, 
 	p.Hostname = hostname
 	p.Auth = auth
 	p.Action = actionName
-	p.Check = 5 * time.Second
+	p.Check = 3 * time.Second
 	p.Timeout = 45 * time.Second
 	p.UpThr = 0.6
 	p.DownThr = 0.3
