@@ -103,3 +103,5 @@ whisk {
 EOF
 
 java -jar openwhisk-standalone.jar --no-ui -c custom.conf
+
+file to edit -> ./core/invoker/src/main/scala/org/apache/openwhisk/core/containerpool/docker/DockerContainer.scala
