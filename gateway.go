@@ -1,13 +1,13 @@
 package main
 
 import (
-	"faasrouter/cnt"
-	"faasrouter/initnf"
-	"faasrouter/nat"
-	"faasrouter/udp"
-	"faasrouter/utils"
 	"log"
 	"net"
+	"nfgateway/cnt"
+	"nfgateway/initnf"
+	"nfgateway/nat"
+	"nfgateway/udp"
+	"nfgateway/utils"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -41,7 +41,7 @@ func main() {
 
 	stop := make(chan struct{})
 
-	log.Printf("Starting faasrouter at %d", time.Now().UnixNano())
+	log.Printf("Starting nfgateway at %d", time.Now().UnixNano())
 
 	initnf.InitNat()
 	initnf.InitDhcp()

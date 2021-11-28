@@ -1,7 +1,7 @@
 package cnt
 
 import (
-	"faasrouter/utils"
+	"nfgateway/utils"
 	"sync"
 )
 

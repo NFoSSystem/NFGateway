@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"faasrouter/utils"
+	"nfgateway/utils"
 
-	"bitbucket.org/Manaphy91/nflib"
+	"github.com/NFoSSystem/nflib"
 )
 
 var Counter uint32 = 0

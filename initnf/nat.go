@@ -1,9 +1,9 @@
 package initnf
 
 import (
-	"faasrouter/utils"
+	"nfgateway/utils"
 
-	"bitbucket.org/Manaphy91/faasnat/natdb"
+	"github.com/NFoSSystem/faasnat/natdb"
 )
 
 const LOCAL_INTERFACE = "127.0.0.1"

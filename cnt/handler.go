@@ -3,16 +3,16 @@ package cnt
 import (
 	"bytes"
 	"encoding/binary"
-	"faasrouter/utils"
 	"fmt"
 	"log"
 	"net"
+	"nfgateway/utils"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"bitbucket.org/Manaphy91/nflib"
+	"github.com/NFoSSystem/nflib"
 )
 
 const (

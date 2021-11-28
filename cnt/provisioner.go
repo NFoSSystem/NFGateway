@@ -1,8 +1,9 @@
 package cnt
 
 import (
-	op "faasrouter/openwhisk"
-	"faasrouter/utils"
+	op "nfgateway/openwhisk"
+	"nfgateway/utils"
+
 	//"log"
 	"math"
 	"math/rand"

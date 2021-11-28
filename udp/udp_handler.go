@@ -2,10 +2,10 @@ package udp
 
 import (
 	"context"
-	"faasrouter/cnt"
-	"faasrouter/utils"
 	"log"
 	"net"
+	"nfgateway/cnt"
+	"nfgateway/utils"
 )
 
 const (

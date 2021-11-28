@@ -70,7 +70,7 @@ http://172.17.0.1:3233
 docker run -d --cpu-shares 256 --memory 256m --memory-swap 256m --network openwhisk_default -e __OW_API_HOST=https://localhost --name wsk0_5_guest_main --cap-drop NET_RAW --cap-drop NET_ADMIN --ulimit nofile=1024:1024 --pids-limit 1024 --log-driver json-file -v /home/abanfi/Documents/private/openwhisk/examples/inner:/root openwhisk/action-golang-v1.15
 
 
-sudo ./faasrouter enp6s0f0 172.17.0.1:3233 MjNiYzQ2YjEtNzFmNi00ZWQ1LThjNTQtODE2YWE0ZjhjNTAyOjEyM3pPM3haQ0xyTU42djJCS0sxZFhZRnBYbFBrY2NPRnFtMTJDZEFzTWdSVTRWck5aOWx5R1ZDR3VNREdJd1A 172.17.0.1:6379
+sudo ./nfgateway enp6s0f0 172.17.0.1:3233 MjNiYzQ2YjEtNzFmNi00ZWQ1LThjNTQtODE2YWE0ZjhjNTAyOjEyM3pPM3haQ0xyTU42djJCS0sxZFhZRnBYbFBrY2NPRnFtMTJDZEFzTWdSVTRWck5aOWx5R1ZDR3VNREdJd1A 172.17.0.1:6379
 wlp2s0:
 
 -----------------------------

@@ -1,10 +1,10 @@
 package initnf
 
 import (
-	"faasrouter/utils"
 	"net"
+	"nfgateway/utils"
 
-	"bitbucket.org/Manaphy91/faasdhcp/dhcpdb"
+	"github.com/NFoSSystem/faasdhcp/dhcpdb"
 )
 
 func InitDhcp() {

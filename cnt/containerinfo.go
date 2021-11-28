@@ -1,11 +1,11 @@
 package cnt
 
 import (
-	"faasrouter/utils"
+	"nfgateway/utils"
 )
 
 type ContainerInfo struct {
-	cntPool *utils.ConnPool
-	cntLst  *ContainerList
+	cntPool   *utils.ConnPool
+	cntLst    *ContainerList
 	maxFluxes int8
 }
